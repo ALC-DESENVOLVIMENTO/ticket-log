@@ -1,0 +1,20 @@
+{
+  "name": "ticket-log-abastecimento",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @ticketlog/domain && npm run build -w @ticketlog/db && npm run build -w @ticketlog/queue && npm run build -w @ticketlog/whatsapp && npm run build -w @ticketlog/ticketlog && npm run build -w @ticketlog/api && npm run build -w @ticketlog/worker-playwright && npm run build -w @ticketlog/web",
+    "typecheck": "npm run typecheck -w @ticketlog/domain && npm run typecheck -w @ticketlog/db && npm run typecheck -w @ticketlog/queue && npm run typecheck -w @ticketlog/whatsapp && npm run typecheck -w @ticketlog/ticketlog && npm run typecheck -w @ticketlog/api && npm run typecheck -w @ticketlog/worker-playwright && npm run typecheck -w @ticketlog/web",
+    "dev:api": "npm run dev -w @ticketlog/api",
+    "dev:worker": "npm run dev -w @ticketlog/worker-playwright",
+    "dev:web": "npm run dev -w @ticketlog/web",
+    "db:migrate": "npm run migrate -w @ticketlog/db"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

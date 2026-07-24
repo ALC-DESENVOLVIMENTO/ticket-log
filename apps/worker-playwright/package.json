@@ -1,0 +1,26 @@
+{
+  "name": "@ticketlog/worker-playwright",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/worker.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/worker.ts",
+    "start": "node dist/worker.js"
+  },
+  "dependencies": {
+    "@ticketlog/db": "*",
+    "@ticketlog/domain": "*",
+    "@ticketlog/queue": "*",
+    "@ticketlog/ticketlog": "*",
+    "bullmq": "^5.12.8",
+    "dotenv": "^16.4.5",
+    "pino": "^9.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}
