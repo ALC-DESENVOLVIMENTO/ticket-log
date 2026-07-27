@@ -1,5 +1,6 @@
 import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { gunzipSync } from "node:zlib";
 
 const railwaySessionDir = "/data/ticketlog-session";
 
@@ -39,18 +40,20 @@ export async function hydrateStorageStateFromEnv(): Promise<"written" | "skipped
   const storageStatePath = resolveStorageStatePath();
   if (!storageStatePath) return "missing_path";
 
+  const rawGzipBase64 = process.env.TICKETLOG_SESSION_STORAGE_GZIP_B64?.trim();
   const rawBase64 = process.env.TICKETLOG_SESSION_STORAGE_B64?.trim();
-  if (!rawBase64) return "skipped";
+  if (!rawGzipBase64 && !rawBase64) return "skipped";
 
   const forceWrite = process.env.TICKETLOG_SESSION_STORAGE_FORCE === "true";
   if (!forceWrite && (await hasStorageStateFile())) {
     return "skipped";
   }
 
-  const normalizedBase64 = rawBase64.replace(/\s+/g, "");
-  const storageStateBytes = Buffer.from(normalizedBase64, "base64");
+  const encodedPayload = rawGzipBase64 ? rawGzipBase64.replace(/\s+/g, "") : rawBase64!.replace(/\s+/g, "");
+  const decodedPayload = Buffer.from(encodedPayload, "base64");
+  const storageStateBytes = rawGzipBase64 ? gunzipSync(decodedPayload) : decodedPayload;
   if (storageStateBytes.length === 0) {
-    throw new Error("TICKETLOG_SESSION_STORAGE_B64 is empty after base64 decoding");
+    throw new Error("Ticket Log session payload is empty after decoding");
   }
 
   await mkdir(dirname(storageStatePath), { recursive: true });
