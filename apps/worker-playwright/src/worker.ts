@@ -2,9 +2,27 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import pino from "pino";
 import { getRedis, limitQueueName, type LimitJobData } from "@ticketlog/queue";
+import { hydrateStorageStateFromEnv } from "@ticketlog/ticketlog";
 import { processLimitRequest } from "./processLimitRequest.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
+
+await hydrateStorageStateFromEnv()
+  .then((status: "written" | "skipped" | "missing_path") => {
+    logger.info({ status }, "ticketlog session bootstrap checked");
+    return status;
+  })
+  .catch((error: unknown) => {
+    logger.error(
+      {
+        errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+      },
+      "ticketlog session bootstrap failed",
+    );
+    throw error;
+  });
 
 const worker = new Worker<LimitJobData>(
   limitQueueName,

@@ -1,4 +1,5 @@
-import { access, readdir } from "node:fs/promises";
+import { access, mkdir, readdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 const railwaySessionDir = "/data/ticketlog-session";
 
@@ -32,6 +33,29 @@ export async function hasUserDataDirState(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function hydrateStorageStateFromEnv(): Promise<"written" | "skipped" | "missing_path"> {
+  const storageStatePath = resolveStorageStatePath();
+  if (!storageStatePath) return "missing_path";
+
+  const rawBase64 = process.env.TICKETLOG_SESSION_STORAGE_B64?.trim();
+  if (!rawBase64) return "skipped";
+
+  const forceWrite = process.env.TICKETLOG_SESSION_STORAGE_FORCE === "true";
+  if (!forceWrite && (await hasStorageStateFile())) {
+    return "skipped";
+  }
+
+  const normalizedBase64 = rawBase64.replace(/\s+/g, "");
+  const storageStateBytes = Buffer.from(normalizedBase64, "base64");
+  if (storageStateBytes.length === 0) {
+    throw new Error("TICKETLOG_SESSION_STORAGE_B64 is empty after base64 decoding");
+  }
+
+  await mkdir(dirname(storageStatePath), { recursive: true });
+  await writeFile(storageStatePath, storageStateBytes);
+  return "written";
 }
 
 function isRailwayRuntime(): boolean {
