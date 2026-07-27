@@ -87,6 +87,17 @@ npm.cmd run validate:browser -w @ticketlog/ticketlog
 
 Essa validacao continua segura: ela nao envia a solicitacao na EVA. No fluxo de producao, a EVA so deve ser executada depois que a etapa `CHANGE_LIMIT` estiver marcada como concluida.
 
+Para validar o preenchimento do formulario de limite sem clicar no botao final `Alterar`, rode:
+
+```powershell
+$env:TICKETLOG_VALIDATE_AMOUNT="10"
+$env:TICKETLOG_VALIDATE_FILL_LIMIT_FORM="true"
+$env:TICKETLOG_VALIDATE_EVA_FLOW="false"
+npm.cmd run validate:browser -w @ticketlog/ticketlog
+```
+
+Esse modo seleciona `Adicionar o valor ao limite atual`, preenche o valor, seleciona `Somente para o periodo`, informa motivo `.`, marca a caixa da placa e para antes de enviar a alteracao.
+
 ## Criterios de aceite da validacao
 
 - `AUTHENTICATE` passou ou parou corretamente em intervencao humana.
@@ -98,6 +109,7 @@ Essa validacao continua segura: ela nao envia a solicitacao na EVA. No fluxo de 
 - `INSPECT_CHANGE_LIMIT_FORM` encontrou todos os campos necessarios.
 - `INSPECT_EVA_FLOW` fica `SKIPPED` no modo padrao.
 - Quando `TICKETLOG_VALIDATE_EVA_FLOW=true`, `INSPECT_EVA_FLOW` encontrou o fluxo da EVA sem clicar em enviar.
+- Quando `TICKETLOG_VALIDATE_FILL_LIMIT_FORM=true`, `FILL_LIMIT_FORM_DRY_RUN` preencheu o formulario e nao clicou em `Alterar`.
 
 Somente depois disso o modo `TICKETLOG_PROVIDER_MODE=browser` deve ser testado com uma placa de homologacao e valor autorizado pela empresa.
 

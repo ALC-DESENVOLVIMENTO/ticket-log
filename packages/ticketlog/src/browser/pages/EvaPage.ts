@@ -1,51 +1,126 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { ManualInterventionError, normalizePlate } from "@ticketlog/domain";
 
 export class EvaPage {
   constructor(private readonly page: Page) {}
 
   async open(): Promise<void> {
-    const evaButton = this.page.getByRole("button", { name: /eva|assistente virtual/i }).first();
-    if (await evaButton.isVisible().catch(() => false)) {
-      await evaButton.click();
-    } else if (!(await this.page.getByText(/ol., sou a eva|assistente virtual/i).first().isVisible().catch(() => false))) {
-      throw new Error("EVA_BUTTON_NOT_FOUND");
+    if (await this.getEvaFrame(1_000)) return;
+
+    const evaButton = await this.findVisible([
+      this.page.locator("button.eva-button, button[aria-label='EVA']").first(),
+      this.page.getByRole("button", { name: /eva|assistente virtual/i }).first(),
+    ]).catch(() => null);
+
+    if (!evaButton) {
+      throw new ManualInterventionError("EVA_BUTTON_NOT_FOUND");
     }
 
-    await expect(this.page.getByText(/eva|assistente/i).first()).toBeVisible();
+    await evaButton.click({ force: true });
+    if (!(await this.getEvaFrame())) {
+      throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
+    }
   }
 
   async releaseFuelRestriction(plate: string): Promise<void> {
-    const panel = await this.getPanel();
-    await this.findVisible([
-      panel.getByRole("button", { name: /^transa..es$/i }),
-      panel.getByText(/^\s*transa..es\s*$/i),
-    ]).then((locator) => locator.click());
+    const frame = await this.openReleaseFuelRestrictionFlow();
+    const textbox = await this.findVisible([
+      frame.getByRole("textbox").last(),
+      frame.locator("textarea:visible").last(),
+      frame.locator("input:visible").last(),
+    ]);
 
-    const updatedPanel = await this.getPanel();
-    await this.findVisible([
-      updatedPanel.getByRole("button", { name: /liberar abastecimento.*restri..o/i }),
-      updatedPanel.getByText(/^\s*liberar abastecimento.*restri..o\s*$/i),
-    ]).then((locator) => locator.click());
-
-    const textbox = this.page.getByRole("textbox").last();
     await textbox.fill(normalizePlate(plate));
+
     await this.findVisible([
-      (await this.getPanel()).getByRole("button", { name: /enviar|confirmar/i }),
-      this.page.locator("button").last(),
+      frame.getByRole("button", { name: /enviar|confirmar/i }),
+      frame.locator("button:visible").last(),
     ]).then((locator) => locator.click());
 
-    await expect(
-      this.page.getByText(/libera..o conclu.da|abastecimento liberado|restri..o liberada|fiz a libera..o da restri..o/i).first(),
-    ).toBeVisible();
+    const confirmation = await this.waitForEvaConfirmation(frame);
+    if (!confirmation) {
+      throw new ManualInterventionError("EVA_RELEASE_CONFIRMATION_NOT_FOUND");
+    }
   }
 
-  private async getPanel(): Promise<Locator> {
-    const textbox = this.page.getByRole("textbox").last();
-    await expect(textbox).toBeVisible({ timeout: 15_000 });
-    const panel = textbox.locator("xpath=ancestor::*[contains(., 'EVA')][1]");
-    if (await panel.isVisible().catch(() => false)) return panel;
-    throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
+  async prepareFuelRestrictionDryRun(plate: string): Promise<void> {
+    const frame = await this.openReleaseFuelRestrictionFlow();
+    const textbox = await this.findVisible([
+      frame.getByRole("textbox").last(),
+      frame.locator("textarea:visible").last(),
+      frame.locator("input:visible").last(),
+    ]);
+
+    await textbox.fill(normalizePlate(plate));
+    await expect(textbox).toHaveValue(normalizePlate(plate));
+    await expect(frame.locator("button:visible").last()).toBeVisible();
+  }
+
+  private async openReleaseFuelRestrictionFlow(): Promise<Frame> {
+    await this.open();
+    const frame = await this.requireEvaFrame();
+
+    await this.clickEvaOption(frame, /^transa..es/i);
+    await this.clickEvaOption(frame, /liberar abastecimento.*restri/i);
+    return frame;
+  }
+
+  private async clickEvaOption(frame: Frame, name: RegExp): Promise<void> {
+    const option = await this.waitForVisible([
+      frame.getByRole("button", { name }),
+      frame.getByText(name).first(),
+    ]);
+
+    await option.click({ force: true });
+    await this.page.waitForTimeout(1_000);
+  }
+
+  private async requireEvaFrame(): Promise<Frame> {
+    const frame = await this.getEvaFrame();
+    if (!frame) throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
+    return frame;
+  }
+
+  private async getEvaFrame(timeoutMs = 30_000): Promise<Frame | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      for (const frame of this.page.frames()) {
+        const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+        if (frame.url().includes("eva-front.edenred.com.br")) return frame;
+        if (/sou a eva|digite sobre o que deseja falar|digite aqui sua d.vida/i.test(body)) return frame;
+      }
+
+      await this.page.waitForTimeout(500);
+    }
+
+    return null;
+  }
+
+  private async waitForEvaConfirmation(frame: Frame): Promise<string | null> {
+    const deadline = Date.now() + 60_000;
+    const successPattern = /libera..o conclu.da|abastecimento liberado|restri..o liberada|fiz a libera..o da restri/i;
+
+    while (Date.now() < deadline) {
+      const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      if (successPattern.test(body)) return body.slice(0, 500);
+      await this.page.waitForTimeout(1_000);
+    }
+
+    return null;
+  }
+
+  private async waitForVisible(candidates: Locator[], timeoutMs = 20_000): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      for (const candidate of candidates) {
+        const locator = candidate.first();
+        if (await locator.isVisible().catch(() => false)) return locator;
+      }
+
+      await this.page.waitForTimeout(500);
+    }
+
+    throw new ManualInterventionError("VISIBLE_LOCATOR_NOT_FOUND");
   }
 
   private async findVisible(candidates: Locator[]): Promise<Locator> {

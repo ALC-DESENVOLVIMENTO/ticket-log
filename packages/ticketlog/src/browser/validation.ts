@@ -2,6 +2,8 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { chromium, expect, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "@playwright/test";
 import { ManualInterventionError, normalizePlate } from "@ticketlog/domain";
+import { EvaPage } from "./pages/EvaPage.js";
+import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
 
 type StepStatus = "PASSED" | "FAILED" | "SKIPPED";
 
@@ -109,6 +111,10 @@ export class BrowserTicketLogValidator {
       if (!changeLimitFormOk) {
         skipStep("INSPECT_EVA_FLOW", "EVA nao validada porque a etapa de limite nao foi validada");
         return this.finishReport({ startedAt, steps, vehiclePlate, outputPath: options.outputPath });
+      }
+
+      if (process.env.TICKETLOG_VALIDATE_FILL_LIMIT_FORM === "true") {
+        await runStep("FILL_LIMIT_FORM_DRY_RUN", () => this.fillLimitFormDryRun(page, vehiclePlate));
       }
 
       if (process.env.TICKETLOG_VALIDATE_EVA_FLOW === "true") {
@@ -356,34 +362,19 @@ export class BrowserTicketLogValidator {
     return "Formulario de alterar limite encontrado; botao final nao foi acionado";
   }
 
+  private async fillLimitFormDryRun(page: Page, plate: string): Promise<string> {
+    const amount = Number(process.env.TICKETLOG_VALIDATE_AMOUNT ?? 10);
+    const fleet = new FleetVehiclePage(page);
+    return fleet.prepareTemporaryLimitDryRun({ plate, amount, reason: "." });
+  }
+
   private async inspectEvaFlow(page: Page, plate: string): Promise<string> {
-    const evaButton = page.getByRole("button", { name: /eva|assistente virtual/i });
-    if (!(await isVisible(evaButton))) {
-      return "Icone/botao EVA nao encontrado nesta tela";
-    }
+    const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
+    await page.goto(homeUrl);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
 
-    await evaButton.click();
-    await expect(page.getByText(/eva|assistente/i).first()).toBeVisible();
-
-    const panel = await getEvaPanel(page);
-    await firstVisible([
-      panel.getByRole("button", { name: /^transa..es$/i }),
-      panel.getByText(/^\s*transa..es\s*$/i),
-    ]).then((locator) => locator.click());
-
-    const updatedPanel = await getEvaPanel(page);
-    await firstVisible([
-      updatedPanel.getByRole("button", { name: /liberar abastecimento.*restri..o/i }),
-      updatedPanel.getByText(/^\s*liberar abastecimento.*restri..o\s*$/i),
-    ]).then((locator) => locator.click());
-
-    const textboxes = page.getByRole("textbox");
-    if ((await textboxes.count()) === 0) {
-      throw new ManualInterventionError("EVA_PLATE_TEXTBOX_NOT_FOUND");
-    }
-
-    await textboxes.last().fill(plate);
-    await expect(page.getByRole("button", { name: /enviar|confirmar/i })).toBeVisible();
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun(plate);
     await this.closeDialogIfPossible(page);
     return "Fluxo EVA localizado e placa preenchida; envio nao foi acionado";
   }
@@ -532,14 +523,6 @@ async function clickChangeLimitEntrypoint(page: Page): Promise<void> {
   if (visualResult) return;
 
   throw new ManualInterventionError(`CHANGE_LIMIT_CLICK_DID_NOT_OPEN_FORM:${attempts.join("|")}`);
-}
-
-async function getEvaPanel(page: Page): Promise<Locator> {
-  const textbox = page.getByRole("textbox").last();
-  await expect(textbox).toBeVisible({ timeout: 15_000 });
-  const panel = textbox.locator("xpath=ancestor::*[contains(., 'EVA')][1]");
-  if (await isVisible(panel)) return panel;
-  throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
 }
 
 async function clickAndConfirmChangeLimit(page: Page, locator: Locator): Promise<boolean> {

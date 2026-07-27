@@ -78,36 +78,23 @@ export class FleetVehiclePage {
 
   async addTemporaryLimit(input: { plate: string; amount: number; reason: string }): Promise<string> {
     const formFrame = await this.openChangeLimitForm();
-    await formFrame.locator("input[type='radio'][name='tipo'][value='AR']").first().check({ force: true });
+    await this.fillTemporaryLimitForm(formFrame, input);
 
-    const valueField = formFrame.locator("input#valor, input[name='valor']").first();
-    await expect(valueField).toBeVisible();
-    await valueField.fill(formatCurrencyInput(input.amount));
-    await formFrame.locator("input[type='radio'][name='fl_tipo_operacao'][value='SP']").first().check({ force: true });
-
-    const reasonField = formFrame.locator("input#ds_justifica, input[name='ds_justifica']").first();
-    await expect(reasonField).toBeVisible();
-    await reasonField.fill(input.reason);
-
-    const normalizedPlate = normalizePlate(input.plate);
-    const row = formFrame.locator("tr").filter({ hasText: normalizedPlate });
-    const rowCount = await row.count();
-    if (rowCount !== 1) {
-      throw new ManualInterventionError(
-        rowCount === 0 ? "PLATE_ROW_NOT_FOUND_ON_LIMIT_FORM" : "MULTIPLE_PLATE_ROWS_ON_LIMIT_FORM",
-      );
-    }
-
-    await row.first().locator("input[type='checkbox'][name='chklimite']").first().check({ force: true });
     await formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first().click();
 
-    const confirmation = formFrame.getByText(/alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso/i).first();
-    try {
-      await expect(confirmation).toBeVisible({ timeout: 45_000 });
-    } catch {
+    const confirmation = await this.waitForLimitChangeConfirmation();
+    if (!confirmation) {
       throw new IndeterminateResultError("CHANGE_LIMIT_CONFIRMATION_NOT_FOUND");
     }
-    return confirmation.innerText();
+
+    return confirmation;
+  }
+
+  async prepareTemporaryLimitDryRun(input: { plate: string; amount: number; reason: string }): Promise<string> {
+    const formFrame = await this.openChangeLimitForm();
+    await this.fillTemporaryLimitForm(formFrame, input);
+    await expect(formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first()).toBeVisible();
+    return "Formulario de limite preenchido em dry-run; botao final Alterar nao foi acionado";
   }
 
   private async openChangeLimitForm(): Promise<Page | Frame> {
@@ -165,6 +152,63 @@ export class FleetVehiclePage {
     }
 
     await label.click();
+  }
+
+  private async fillTemporaryLimitForm(
+    formFrame: Page | Frame,
+    input: { plate: string; amount: number; reason: string },
+  ): Promise<void> {
+    const addToCurrentLimit = formFrame.locator("input[type='radio'][name='tipo'][value='AR']").first();
+    await expect(addToCurrentLimit).toBeVisible();
+    await addToCurrentLimit.check({ force: true });
+
+    const value = formatCurrencyInput(input.amount);
+    const valueField = formFrame.locator("input#valor, input[name='valor']").first();
+    await expect(valueField).toBeVisible();
+    await valueField.fill(value);
+    await expect(valueField).toHaveValue(value);
+
+    const currentPeriod = formFrame.locator("input[type='radio'][name='fl_tipo_operacao'][value='SP']").first();
+    await expect(currentPeriod).toBeVisible();
+    await currentPeriod.check({ force: true });
+
+    const reasonField = formFrame.locator("input#ds_justifica, input[name='ds_justifica']").first();
+    await expect(reasonField).toBeVisible();
+    await reasonField.fill(input.reason);
+    await expect(reasonField).toHaveValue(input.reason);
+
+    const normalizedPlate = normalizePlate(input.plate);
+    const row = formFrame.locator("tr").filter({ hasText: normalizedPlate });
+    const rowCount = await row.count();
+    if (rowCount !== 1) {
+      throw new ManualInterventionError(
+        rowCount === 0 ? "PLATE_ROW_NOT_FOUND_ON_LIMIT_FORM" : "MULTIPLE_PLATE_ROWS_ON_LIMIT_FORM",
+      );
+    }
+
+    const plateCheckbox = row.first().locator("input[type='checkbox'][name='chklimite']").first();
+    await expect(plateCheckbox).toBeVisible();
+    await plateCheckbox.check({ force: true });
+    await expect(plateCheckbox).toBeChecked();
+  }
+
+  private async waitForLimitChangeConfirmation(): Promise<string | null> {
+    const deadline = Date.now() + 60_000;
+    const successPattern = /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]/i;
+
+    while (Date.now() < deadline) {
+      await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+        const match = bodyText.match(successPattern);
+        if (match) return bodyText.slice(0, 500);
+      }
+
+      await this.page.waitForTimeout(1_000);
+    }
+
+    return null;
   }
 
   private async findVisible(candidates: Locator[]): Promise<Locator> {

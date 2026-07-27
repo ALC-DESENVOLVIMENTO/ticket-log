@@ -107,8 +107,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   }
 
   private async openEvaHostPage(page: Page): Promise<void> {
-    const homeUrl = process.env.TICKETLOG_HOME_URL;
-    if (!homeUrl) return;
+    const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
 
     await page.goto(homeUrl);
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
