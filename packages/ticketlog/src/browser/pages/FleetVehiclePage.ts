@@ -8,7 +8,7 @@ export class FleetVehiclePage {
     const url = process.env.TICKETLOG_VEHICLE_LIST_URL;
     if (!url) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
     await this.page.goto(url);
-    await expect(this.page.getByText(/ve[ií]culos|placa/i).first()).toBeVisible();
+    await expect(this.page.getByText(/ve.culos|placa/i).first()).toBeVisible();
   }
 
   async searchPlate(plate: string): Promise<{ count: number; foundPlate?: string }> {
@@ -49,7 +49,7 @@ export class FleetVehiclePage {
     await this.page.getByRole("button", { name: /alterar limite/i }).click();
     await this.page.getByLabel(/adicionar.*limite atual/i).check();
     await this.page.getByLabel(/valor/i).fill(formatCurrencyInput(input.amount));
-    await this.page.getByLabel(/somente para o per[ií]odo/i).check();
+    await this.page.getByLabel(/somente para o per.odo/i).check();
     await this.page.getByLabel(/motivo/i).fill(input.reason);
     await this.page.getByRole("checkbox", { name: new RegExp(normalizePlate(input.plate), "i") }).check();
     await this.page.getByRole("button", { name: /^alterar$/i }).click();

@@ -75,7 +75,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     if (!loginUrl) return;
 
     await page.goto(loginUrl);
-    if (await page.getByText(/captcha|mfa|autenticador|c[oó]digo/i).first().isVisible().catch(() => false)) {
+    if (await page.getByText(/captcha|mfa|autenticador|c.digo/i).first().isVisible().catch(() => false)) {
       throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
     }
 
@@ -83,7 +83,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const password = process.env.TICKETLOG_PASSWORD;
     if (!username || !password) return;
 
-    const userField = page.getByLabel(/usu[aá]rio|e-mail|email|login/i);
+    const userField = page.getByLabel(/usu.rio|e-mail|email|login/i);
     if (await userField.isVisible().catch(() => false)) {
       await userField.fill(username);
       await page.getByLabel(/senha/i).fill(password);

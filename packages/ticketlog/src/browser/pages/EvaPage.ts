@@ -10,13 +10,13 @@ export class EvaPage {
   }
 
   async releaseFuelRestriction(plate: string): Promise<void> {
-    await this.page.getByText(/transa[cç][oõ]es/i).click();
-    await this.page.getByText(/liberar abastecimento.*restri[cç][aã]o/i).click();
+    await this.page.getByText(/transa..es/i).click();
+    await this.page.getByText(/liberar abastecimento.*restri..o/i).click();
     await this.page.getByRole("textbox").last().fill(normalizePlate(plate));
     await this.page.getByRole("button", { name: /enviar|confirmar/i }).click();
 
     await expect(
-      this.page.getByText(/libera[cç][aã]o conclu[ií]da|abastecimento liberado|restri[cç][aã]o liberada/i).first(),
+      this.page.getByText(/libera..o conclu.da|abastecimento liberado|restri..o liberada/i).first(),
     ).toBeVisible();
   }
 }
