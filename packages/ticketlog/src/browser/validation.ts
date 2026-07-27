@@ -223,8 +223,19 @@ export class BrowserTicketLogValidator {
   }
 
   private async searchPlate(page: Page, plate: string): Promise<string> {
-    await page.getByLabel(/placa/i).fill(plate);
-    await page.getByRole("button", { name: /pesquisar|buscar|filtrar/i }).click();
+    const plateSearch = await firstVisible([
+      page.getByLabel(/placa|identificador/i),
+      page.getByPlaceholder(/placa|identificador|pesquise|busque/i),
+      page.getByRole("textbox").first(),
+    ]);
+
+    await plateSearch.fill(plate);
+    const searchButton = page.getByRole("button", { name: /pesquisar|buscar|filtrar/i }).first();
+    if (await isVisible(searchButton)) {
+      await searchButton.click();
+    } else {
+      await plateSearch.press("Enter");
+    }
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
 
     const rows = page.getByRole("row").filter({ hasText: plate });
@@ -236,7 +247,11 @@ export class BrowserTicketLogValidator {
   }
 
   private async openPlate(page: Page, plate: string): Promise<string> {
-    await page.getByRole("link", { name: new RegExp(plate, "i") }).click();
+    const plateLink = await firstVisible([
+      page.getByRole("link", { name: new RegExp(plate, "i") }),
+      page.getByText(plate, { exact: false }).first(),
+    ]);
+    await plateLink.click();
     await expect(page.getByText(plate).first()).toBeVisible();
     return "Detalhe do veiculo aberto";
   }
@@ -254,7 +269,7 @@ export class BrowserTicketLogValidator {
   }
 
   private async readCurrentLimit(page: Page): Promise<string> {
-    const label = page.getByText(/limite atual/i).first();
+    const label = page.getByText(/limite atual|limite total/i).first();
     if (!(await isVisible(label))) {
       return "Campo limite atual nao encontrado; pode depender do layout ou permissao";
     }
@@ -265,13 +280,32 @@ export class BrowserTicketLogValidator {
   }
 
   private async inspectChangeLimitForm(page: Page, plate: string): Promise<string> {
-    await page.getByRole("button", { name: /alterar limite/i }).click();
+    const formAlreadyOpen = await isVisible(page.getByText(/altera..o de limite/i).first());
+    if (!formAlreadyOpen) {
+      const entrypoint = await firstVisible([
+        page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
+        page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
+        page.getByText(/altera..o de limite|alterar limite/i).first(),
+      ]);
+      await entrypoint.click();
+    }
 
     await expect(page.getByLabel(/adicionar.*limite atual/i)).toBeVisible();
-    await expect(page.getByLabel(/valor/i)).toBeVisible();
+    await expect(
+      (await firstVisible([
+        page.getByLabel(/valor para altera..o|valor/i),
+        page.getByRole("textbox").first(),
+        page.getByRole("spinbutton").first(),
+      ])).first(),
+    ).toBeVisible();
     await expect(page.getByLabel(/somente para o per.odo/i)).toBeVisible();
     await expect(page.getByLabel(/motivo/i)).toBeVisible();
-    await expect(page.getByRole("checkbox", { name: new RegExp(plate, "i") })).toBeVisible();
+
+    const row = page.getByRole("row").filter({ hasText: plate });
+    if ((await row.count()) !== 1) {
+      throw new ManualInterventionError("PLATE_ROW_NOT_FOUND_ON_LIMIT_FORM");
+    }
+    await expect(row.first().getByRole("checkbox")).toBeVisible();
     await expect(page.getByRole("button", { name: /^alterar$/i })).toBeVisible();
 
     await this.closeDialogIfPossible(page);
@@ -354,6 +388,15 @@ function maskPlate(plate: string): string {
 
 async function isVisible(locator: Locator): Promise<boolean> {
   return locator.first().isVisible().catch(() => false);
+}
+
+async function firstVisible(candidates: Locator[]): Promise<Locator> {
+  for (const candidate of candidates) {
+    const locator = candidate.first();
+    if (await isVisible(locator)) return locator;
+  }
+
+  throw new Error("VISIBLE_LOCATOR_NOT_FOUND");
 }
 
 async function waitBeforeClosingBrowser(): Promise<void> {

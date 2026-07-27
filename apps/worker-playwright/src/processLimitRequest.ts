@@ -15,6 +15,8 @@ import {
 import { acquireLock } from "@ticketlog/queue";
 import { createTicketLogProvider } from "@ticketlog/ticketlog";
 
+type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
+
 export async function processLimitRequest(requestId: string): Promise<void> {
   const request = await getRequest(requestId);
   if (!request) throw new Error("REQUEST_NOT_FOUND");
@@ -33,6 +35,8 @@ export async function processLimitRequest(requestId: string): Promise<void> {
     throw new ReprocessableAutomationError("PLATE_ALREADY_LOCKED");
   }
 
+  let currentStep: AutomationStepKey = "CHANGE_LIMIT";
+
   try {
     if (request.status === "FALHA_REPROCESSAVEL") {
       await transitionRequest(requestId, "NA_FILA");
@@ -42,6 +46,7 @@ export async function processLimitRequest(requestId: string): Promise<void> {
 
     const limitAlreadyChanged = await hasCompletedStep(requestId, "CHANGE_LIMIT");
     if (limitAlreadyChanged) {
+      currentStep = "EVA_RELEASE";
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
       await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
@@ -67,6 +72,7 @@ export async function processLimitRequest(requestId: string): Promise<void> {
     await upsertAutomationStep({ requestId, stepKey: "CHANGE_LIMIT", status: "DONE" });
     await transitionRequest(requestId, "LIMITE_ALTERADO");
 
+    currentStep = "EVA_RELEASE";
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
     await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
@@ -83,29 +89,33 @@ export async function processLimitRequest(requestId: string): Promise<void> {
       },
     });
   } catch (error) {
-    await classifyFailure(requestId, error);
-    throw error;
+    const shouldRetry = await classifyFailure(requestId, error, currentStep);
+    if (shouldRetry) throw error;
   } finally {
     await lock.release();
   }
 }
 
-async function classifyFailure(requestId: string, error: unknown): Promise<void> {
+async function classifyFailure(requestId: string, error: unknown, stepKey: AutomationStepKey): Promise<boolean> {
   if (error instanceof ManualInterventionError) {
-    await upsertAutomationStep({ requestId, stepKey: "CHANGE_LIMIT", status: "FAILED", errorCode: error.code });
+    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
     await transitionRequest(requestId, "FALHA_MANUAL").catch(() => undefined);
-    return;
+    return false;
   }
 
   if (error instanceof IndeterminateResultError) {
+    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.message });
     await transitionRequest(requestId, "RESULTADO_INDETERMINADO").catch(() => undefined);
-    return;
+    return false;
   }
 
   if (error instanceof ReprocessableAutomationError) {
+    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
     await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
-    return;
+    return true;
   }
 
+  await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: "UNEXPECTED_ERROR" });
   await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+  return true;
 }

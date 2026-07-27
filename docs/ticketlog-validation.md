@@ -2,6 +2,8 @@
 
 Este procedimento valida a interface da Ticket Log sem executar alteracao real de limite e sem enviar liberacao pela EVA.
 
+Veja tambem `docs/ticketlog-observed-flow.md`, que registra o fluxo observado no video de referencia fornecido em 2026-07-27.
+
 ## O que o validador faz
 
 - Abre a sessao da Ticket Log/Sou Log+ com Playwright.
@@ -29,6 +31,7 @@ Configure localmente ou no Railway, nunca no chat:
 
 ```env
 TICKETLOG_LOGIN_URL=https://URL-DE-LOGIN-DA-TICKETLOG
+TICKETLOG_HOME_URL=https://plataforma.ticketlog.com.br/home
 TICKETLOG_VEHICLE_LIST_URL=https://plataforma.ticketlog.com.br/register/fleet/vehicle/list
 TICKETLOG_VALIDATE_PLATE=ABC1D23
 TICKETLOG_SESSION_STORAGE_PATH=.secrets/ticketlog-storage.json
@@ -50,6 +53,8 @@ TICKETLOG_PASSWORD=senha-corporativa
 Se houver SMS, MFA, CAPTCHA ou confirmacao corporativa, use `TICKETLOG_ALLOW_MANUAL_LOGIN=true`. O navegador abre, voce conclui o login manualmente e, quando estiver dentro da Ticket Log, pressiona Enter no terminal para a validacao continuar.
 
 Use `TICKETLOG_USER_DATA_DIR=.secrets/ticketlog-profile` para manter um perfil persistente do Chromium. Esse perfil preserva cookies, localStorage e cache entre execucoes, ajudando a evitar reCAPTCHA repetido quando a propria Ticket Log considera a sessao confiavel.
+
+No fluxo observado, a Ticket Log tambem pode perguntar se o navegador deve ser considerado confiavel. Essa escolha deve ser feita manualmente conforme a politica da empresa; o robo nao clica nessa confirmacao.
 
 ## Como executar
 

@@ -1,13 +1,20 @@
-import { chromium, type Browser, type BrowserContext } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { normalizePlate, ManualInterventionError } from "@ticketlog/domain";
 import type { TicketLogLimitInput, TicketLogLimitResult, TicketLogProvider } from "../provider.js";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
 
+interface BrowserSession {
+  context: BrowserContext;
+  close(): Promise<void>;
+}
+
 export class BrowserTicketLogProvider implements TicketLogProvider {
   async changeLimit(input: TicketLogLimitInput): Promise<TicketLogLimitResult> {
-    const browser = await chromium.launch({ headless: process.env.TICKETLOG_HEADLESS !== "false" });
-    const context = await this.createContext(browser);
+    const session = await this.createBrowserSession();
+    const context = session.context;
     const page = await context.newPage();
 
     try {
@@ -37,7 +44,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       });
       const newLimit = await fleet.readCurrentLimit();
 
-      await context.storageState({ path: process.env.TICKETLOG_SESSION_STORAGE_PATH });
+      await this.saveStorageState(context);
 
       return {
         previousLimit,
@@ -46,28 +53,65 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
         platformResult,
       };
     } finally {
-      await browser.close();
+      await session.close();
     }
   }
 
   async releaseEvaOnly(input: Pick<TicketLogLimitInput, "vehiclePlate">): Promise<void> {
-    const browser = await chromium.launch({ headless: process.env.TICKETLOG_HEADLESS !== "false" });
-    const context = await this.createContext(browser);
+    const session = await this.createBrowserSession();
+    const context = session.context;
     const page = await context.newPage();
     try {
       await this.ensureAuthenticated(page);
+      await this.openEvaHostPage(page);
       const eva = new EvaPage(page);
       await eva.open();
       await eva.releaseFuelRestriction(input.vehiclePlate);
-      await context.storageState({ path: process.env.TICKETLOG_SESSION_STORAGE_PATH });
+      await this.saveStorageState(context);
     } finally {
-      await browser.close();
+      await session.close();
     }
+  }
+
+  private async createBrowserSession(): Promise<BrowserSession> {
+    const headless = process.env.TICKETLOG_HEADLESS !== "false";
+    const userDataDir = process.env.TICKETLOG_USER_DATA_DIR;
+
+    if (userDataDir) {
+      await mkdir(userDataDir, { recursive: true });
+      const context = await chromium.launchPersistentContext(userDataDir, { headless });
+      return {
+        context,
+        close: () => context.close(),
+      };
+    }
+
+    const browser = await chromium.launch({ headless });
+    const context = await this.createContext(browser);
+    return {
+      context,
+      close: () => browser.close(),
+    };
   }
 
   private async createContext(browser: Browser): Promise<BrowserContext> {
     const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
     return browser.newContext(storageState ? { storageState } : {});
+  }
+
+  private async saveStorageState(context: BrowserContext): Promise<void> {
+    const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
+    if (!storageState) return;
+    await mkdir(dirname(storageState), { recursive: true });
+    await context.storageState({ path: storageState });
+  }
+
+  private async openEvaHostPage(page: Page): Promise<void> {
+    const homeUrl = process.env.TICKETLOG_HOME_URL;
+    if (!homeUrl) return;
+
+    await page.goto(homeUrl);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
   private async ensureAuthenticated(page: { goto(url: string): Promise<unknown>; getByLabel(label: RegExp): any; getByRole(role: string, options: any): any; getByText(text: RegExp): any }): Promise<void> {
