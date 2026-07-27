@@ -221,7 +221,13 @@ function ApprovalView({ token, onAuthNeeded }: { token: string; onAuthNeeded: ()
   );
 }
 
-function RequestPanel({ publicConfig }: { publicConfig: any }) {
+function RequestPanel({
+  publicConfig,
+  onRequestCreated,
+}: {
+  publicConfig: any;
+  onRequestCreated: (requestId: string) => void;
+}) {
   const [plate, setPlate] = useState("");
   const [vehicleGroup, setVehicleGroup] = useState("GERAL_DE_RESTRICOES");
   const [amount, setAmount] = useState("");
@@ -229,17 +235,23 @@ function RequestPanel({ publicConfig }: { publicConfig: any }) {
   const [created, setCreated] = useState<any>(null);
   const [createError, setCreateError] = useState("");
 
+  const selectedGroupPolicy = (publicConfig?.vehicleGroups ?? []).find((group: any) => group.key === vehicleGroup);
+  const secondApprovalFrom = Number(selectedGroupPolicy?.requiresSecondApprovalFrom ?? 0);
+  const requiresSecondApprovalHint = secondApprovalFrom > 0;
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setCreateError("");
     setCreated(null);
     try {
-      setCreated(await createRequest({
+      const result = await createRequest({
         vehiclePlate: plate,
         vehicleGroup,
         requestedAmount: Number(amount.replace(",", ".")),
         justification,
-      }));
+      });
+      setCreated(result);
+      onRequestCreated(result.request.id);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "REQUEST_CREATE_FAILED");
     }
@@ -269,7 +281,11 @@ function RequestPanel({ publicConfig }: { publicConfig: any }) {
         Valor adicional
         <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="350,00" />
       </label>
-      <span className="hint">Toda solicitacao exige segunda aprovacao. O link expira em {publicConfig?.approvalTtlMinutes ?? 30} minutos.</span>
+      <span className="hint">
+        {requiresSecondApprovalHint
+          ? `Segunda aprovacao somente a partir de ${money(secondApprovalFrom)}. O link expira em ${publicConfig?.approvalTtlMinutes ?? 30} minutos.`
+          : `Solicitacao com aprovacao unica para este grupo. O link expira em ${publicConfig?.approvalTtlMinutes ?? 30} minutos.`}
+      </span>
       <label>
         Justificativa interna
         <textarea value={justification} onChange={(event) => setJustification(event.target.value)} />
@@ -291,21 +307,55 @@ function RequestPanel({ publicConfig }: { publicConfig: any }) {
   );
 }
 
-function StatusPanel() {
-  const [lookupId, setLookupId] = useState("");
+function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
+  const [lookupId, setLookupId] = useState(initialLookupId);
   const [lookup, setLookup] = useState<any>(null);
   const [lookupError, setLookupError] = useState("");
   const [secondApprovalStatus, setSecondApprovalStatus] = useState("");
 
+  useEffect(() => {
+    if (!initialLookupId) return;
+    setLookupId(initialLookupId);
+    getRequest(initialLookupId)
+      .then((result) => {
+        setLookup(result);
+        setLookupError("");
+      })
+      .catch((err) => setLookupError(err instanceof Error ? err.message : "REQUEST_LOOKUP_FAILED"));
+  }, [initialLookupId]);
+
   async function search() {
     setLookupError("");
     setLookup(null);
+    setSecondApprovalStatus("");
+
+    if (!lookupId.trim()) {
+      setLookupError("INFORME_O_ID_DA_SOLICITACAO");
+      return;
+    }
+
     try {
       setLookup(await getRequest(lookupId));
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : "REQUEST_LOOKUP_FAILED");
     }
   }
+
+  useEffect(() => {
+    if (!lookupId.trim()) return;
+    if (!lookup) return;
+    if (["CONCLUIDA", "REJEITADA", "EXPIRADA", "CANCELADA", "FALHA_MANUAL", "RESULTADO_INDETERMINADO"].includes(lookup.status)) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      getRequest(lookupId)
+        .then(setLookup)
+        .catch((err) => setLookupError(err instanceof Error ? err.message : "REQUEST_LOOKUP_FAILED"));
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [lookup, lookupId]);
 
   async function approveSecond() {
     setLookupError("");
@@ -415,6 +465,7 @@ function UsersPanel() {
 
 function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: any; onLogout: () => void }) {
   const [view, setView] = useState<AppView>("request");
+  const [activeRequestId, setActiveRequestId] = useState("");
   const mode = useMemo(() => import.meta.env.VITE_TICKETLOG_MODE ?? "simulation", []);
 
   return (
@@ -438,8 +489,13 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
           <button className="secondary" onClick={onLogout}><LogOut size={18} /> Sair</button>
         </header>
         <p className="userline">Sessao: {user?.name} ({user?.email})</p>
-        {view === "request" && <div className="grid"><RequestPanel publicConfig={publicConfig} /><StatusPanel /></div>}
-        {view === "history" && <StatusPanel />}
+        {view === "request" && (
+          <div className="grid">
+            <RequestPanel publicConfig={publicConfig} onRequestCreated={setActiveRequestId} />
+            <StatusPanel initialLookupId={activeRequestId} />
+          </div>
+        )}
+        {view === "history" && <StatusPanel initialLookupId={activeRequestId} />}
         {view === "users" && <UsersPanel />}
       </section>
     </main>

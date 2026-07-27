@@ -18,8 +18,10 @@ export function evaluateLimitPolicy(amount: number, policy: LimitPolicy): Policy
     };
   }
 
+  const secondApprovalEnabled = Number(policy.doubleApprovalFrom) > 0;
+
   return {
     allowed: true,
-    requiresSecondApproval: amount >= policy.doubleApprovalFrom,
+    requiresSecondApproval: secondApprovalEnabled && amount >= policy.doubleApprovalFrom,
   };
 }
