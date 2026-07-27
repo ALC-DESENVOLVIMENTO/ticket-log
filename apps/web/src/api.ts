@@ -2,6 +2,10 @@ const RAILWAY_API_BASE_URL = "https://ticket-log-ticketlog.up.railway.app";
 
 function resolveApiBaseUrl() {
   const configured = import.meta.env.VITE_API_BASE_URL;
+  if (import.meta.env.DEV && !configured) {
+    return "http://localhost:3333";
+  }
+
   const isBrowser = typeof window !== "undefined";
   const hostname = isBrowser ? window.location.hostname : "";
   const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1";
@@ -17,7 +21,7 @@ function resolveApiBaseUrl() {
     return configured;
   }
 
-  return `http://${"localhost"}:3333`;
+  return RAILWAY_API_BASE_URL;
 }
 
 const API_BASE_URL = resolveApiBaseUrl().replace(/\/$/, "");
