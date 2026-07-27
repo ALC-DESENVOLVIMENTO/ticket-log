@@ -13,6 +13,8 @@ interface BrowserSession {
 
 export class BrowserTicketLogProvider implements TicketLogProvider {
   async changeLimit(input: TicketLogLimitInput): Promise<TicketLogLimitResult> {
+    this.assertRealExecutionAllowed(input);
+
     const session = await this.createBrowserSession();
     const context = session.context;
     const page = await context.newPage();
@@ -58,6 +60,8 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   }
 
   async releaseEvaOnly(input: Pick<TicketLogLimitInput, "vehiclePlate">): Promise<void> {
+    this.assertEvaExecutionAllowed(input.vehiclePlate);
+
     const session = await this.createBrowserSession();
     const context = session.context;
     const page = await context.newPage();
@@ -132,5 +136,52 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await page.getByLabel(/senha/i).fill(password);
       await page.getByRole("button", { name: /entrar|acessar|login/i }).click();
     }
+  }
+
+  private assertRealExecutionAllowed(input: TicketLogLimitInput): void {
+    if (process.env.TICKETLOG_REAL_EXECUTION !== "true") {
+      throw new ManualInterventionError("REAL_EXECUTION_DISABLED");
+    }
+
+    const normalizedPlate = normalizePlate(input.vehiclePlate);
+    const allowedPlates = this.getAllowedPlates();
+    if (allowedPlates.size > 0 && !allowedPlates.has(normalizedPlate)) {
+      throw new ManualInterventionError("REAL_EXECUTION_PLATE_NOT_ALLOWED");
+    }
+
+    const allowedAmount = process.env.TICKETLOG_REAL_ALLOWED_AMOUNT;
+    if (allowedAmount) {
+      const parsedAllowedAmount = Number(allowedAmount);
+      if (!Number.isFinite(parsedAllowedAmount) || parsedAllowedAmount <= 0) {
+        throw new ManualInterventionError("REAL_EXECUTION_ALLOWED_AMOUNT_INVALID");
+      }
+
+      if (Number(input.requestedAmount) !== parsedAllowedAmount) {
+        throw new ManualInterventionError("REAL_EXECUTION_AMOUNT_NOT_ALLOWED");
+      }
+    }
+  }
+
+  private assertEvaExecutionAllowed(vehiclePlate: string): void {
+    if (process.env.TICKETLOG_REAL_EXECUTION !== "true") {
+      throw new ManualInterventionError("REAL_EXECUTION_DISABLED");
+    }
+
+    const normalizedPlate = normalizePlate(vehiclePlate);
+    const allowedPlates = this.getAllowedPlates();
+    if (allowedPlates.size > 0 && !allowedPlates.has(normalizedPlate)) {
+      throw new ManualInterventionError("REAL_EXECUTION_PLATE_NOT_ALLOWED");
+    }
+  }
+
+  private getAllowedPlates(): Set<string> {
+    const raw = process.env.TICKETLOG_REAL_ALLOWED_PLATES ?? "";
+    return new Set(
+      raw
+        .split(",")
+        .map((plate) => plate.trim())
+        .filter(Boolean)
+        .map((plate) => normalizePlate(plate)),
+    );
   }
 }

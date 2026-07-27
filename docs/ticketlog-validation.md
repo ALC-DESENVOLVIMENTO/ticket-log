@@ -113,6 +113,25 @@ Esse modo seleciona `Adicionar o valor ao limite atual`, preenche o valor, selec
 
 Somente depois disso o modo `TICKETLOG_PROVIDER_MODE=browser` deve ser testado com uma placa de homologacao e valor autorizado pela empresa.
 
+## Primeiro teste real
+
+Para o primeiro teste real de homologacao, use a propria solicitacao no sistema web e deixe o worker processar a fila com estas travas ativas:
+
+```env
+TICKETLOG_PROVIDER_MODE=browser
+TICKETLOG_REAL_EXECUTION=true
+TICKETLOG_REAL_ALLOWED_PLATES=PWH4E85
+TICKETLOG_REAL_ALLOWED_AMOUNT=10
+```
+
+Fluxo recomendado:
+
+1. Crie uma solicitacao real para a placa de homologacao com valor `10`.
+2. Aprove a solicitacao normalmente no painel.
+3. Confirme que ela entrou em `NA_FILA`.
+4. Acompanhe o worker em modo visivel no primeiro teste.
+5. Se a solicitacao vier com outra placa ou outro valor, o worker deve bloquear a execucao real.
+
 ## Observacoes tecnicas confirmadas
 
 - A pagina `/register/fleet/vehicle/list` pode carregar a home mantendo a mesma URL; por isso a automacao nao considera a URL como prova de sucesso.

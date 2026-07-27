@@ -23,6 +23,20 @@ Obrigatorias:
 - `WHATSAPP_APP_SECRET`
 - `TICKETLOG_PROVIDER_MODE`
 
+Para habilitar execucao real em homologacao com o provider de navegador, configure tambem:
+
+- `TICKETLOG_REAL_EXECUTION=true`
+- `TICKETLOG_REAL_ALLOWED_PLATES=PWH4E85`
+- `TICKETLOG_REAL_ALLOWED_AMOUNT=10`
+- `TICKETLOG_HOME_URL=https://plataforma.ticketlog.com.br/home`
+- `TICKETLOG_VEHICLE_LIST_URL=https://plataforma.ticketlog.com.br/register/fleet/vehicle/list`
+
+Com essas travas:
+
+- sem `TICKETLOG_REAL_EXECUTION=true`, o worker bloqueia alteracao real e EVA;
+- se a placa da solicitacao nao estiver em `TICKETLOG_REAL_ALLOWED_PLATES`, o worker para em falha manual;
+- se o valor solicitado nao for exatamente o valor definido em `TICKETLOG_REAL_ALLOWED_AMOUNT`, a alteracao real e bloqueada.
+
 ## Health checks
 
 - API: `/healthz`
