@@ -10,6 +10,7 @@ Base: video local fornecido em 2026-07-27 pelo usuario do projeto. Este document
 - A pagina de veiculos esta em `/register/fleet/vehicle/list` e exibe o titulo `Meus veiculos / equipamentos`.
 - A busca aceita placa no campo de pesquisa da lista.
 - A alteracao de limite abre uma pagina `legacy` com o titulo `Alteracao de Limite`.
+- A tela `legacy` carrega dentro de um iframe de `legacy-soulog.ticketlog.com.br`; os campos nao ficam no DOM principal.
 - O formulario de limite possui:
   - campo `Valor para alteracao`;
   - radio `Adicionar o valor ao limite atual`;
@@ -33,7 +34,10 @@ Base: video local fornecido em 2026-07-27 pelo usuario do projeto. Este document
 - A automacao nao deve tentar resolver reCAPTCHA, codigo por celular, MFA ou escolha de dispositivo confiavel.
 - O login real deve ser feito por sessao persistente previamente autorizada, com intervencao humana quando houver desafio.
 - O worker em producao deve parar em `FALHA_MANUAL` se a plataforma exigir uma confirmacao humana inesperada.
+- A ordem obrigatoria e: buscar placa, abrir detalhe, verificar status, desbloquear se necessario, alterar limite, confirmar alteracao de limite, abrir EVA, liberar abastecimento por restricao.
+- A EVA nao deve ser aberta antes da confirmacao da alteracao de limite.
 - A selecao da placa no formulario de limite deve ocorrer pela linha da tabela que contem exatamente a placa normalizada.
+- A automacao deve aguardar o iframe legado conter `Valor para alteracao` e `Adicionar o valor ao limite atual` antes de preencher qualquer campo.
 - A etapa de limite so pode ser marcada como concluida depois de uma mensagem clara ou reconciliacao visual do novo limite.
 - Se o processo cair apos clicar em `Alterar` e antes de confirmar o resultado, a solicitacao deve ir para `RESULTADO_INDETERMINADO`.
 - Se a alteracao de limite for confirmada e a EVA falhar, o sistema nao deve repetir a alteracao. Deve retomar somente a EVA.

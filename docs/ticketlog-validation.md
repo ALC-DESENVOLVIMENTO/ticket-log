@@ -13,8 +13,11 @@ Veja tambem `docs/ticketlog-observed-flow.md`, que registra o fluxo observado no
 - Abre o detalhe do veiculo.
 - Tenta identificar status e limite atual.
 - Abre o formulario de `Alterar limite` e valida campos obrigatorios.
-- Abre a EVA e valida o fluxo `Transacoes` > `Liberar abastecimento (restricao)`.
-- Preenche a placa na EVA, mas nao envia.
+- Quando a URL direta cair na home, clica no card `VEICULO` e confirma a lista pelo campo `Buscar na tabela`.
+- Na tela de limite, localiza o frame legado `legacy-soulog.ticketlog.com.br` antes de validar os campos.
+- Por padrao, nao abre a EVA. A EVA deve ser validada separadamente, porque no processo real ela so acontece depois da alteracao de limite.
+- Opcionalmente, quando `TICKETLOG_VALIDATE_EVA_FLOW=true`, abre a EVA e valida o fluxo `Transacoes` > `Liberar abastecimento (restricao)`.
+- No modo EVA opcional, preenche a placa na EVA, mas nao envia.
 - Gera um relatorio JSON em `artifacts/ticketlog-validation`.
 
 ## O que o validador nao faz
@@ -41,6 +44,7 @@ TICKETLOG_KEEP_BROWSER_OPEN=true
 TICKETLOG_ALLOW_MANUAL_LOGIN=true
 TICKETLOG_MANUAL_LOGIN_CONTINUE=enter
 TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS=600000
+TICKETLOG_VALIDATE_EVA_FLOW=false
 ```
 
 Se a conta puder fazer login sem etapa humana:
@@ -74,6 +78,15 @@ Opcionalmente defina um caminho de saida:
 $env:TICKETLOG_VALIDATION_OUTPUT_PATH="artifacts/ticketlog-validation/homologacao.json"
 ```
 
+Para validar apenas a navegacao da EVA, depois de confirmar manualmente que o fluxo de limite esta mapeado, rode com:
+
+```powershell
+$env:TICKETLOG_VALIDATE_EVA_FLOW="true"
+npm.cmd run validate:browser -w @ticketlog/ticketlog
+```
+
+Essa validacao continua segura: ela nao envia a solicitacao na EVA. No fluxo de producao, a EVA so deve ser executada depois que a etapa `CHANGE_LIMIT` estiver marcada como concluida.
+
 ## Criterios de aceite da validacao
 
 - `AUTHENTICATE` passou ou parou corretamente em intervencao humana.
@@ -83,6 +96,20 @@ $env:TICKETLOG_VALIDATION_OUTPUT_PATH="artifacts/ticketlog-validation/homologaca
 - `READ_STATUS` identificou status ou registrou incerteza sem continuar com acao real.
 - `READ_CURRENT_LIMIT` encontrou o limite atual ou registrou ausencia do campo.
 - `INSPECT_CHANGE_LIMIT_FORM` encontrou todos os campos necessarios.
-- `INSPECT_EVA_FLOW` encontrou o fluxo da EVA sem clicar em enviar.
+- `INSPECT_EVA_FLOW` fica `SKIPPED` no modo padrao.
+- Quando `TICKETLOG_VALIDATE_EVA_FLOW=true`, `INSPECT_EVA_FLOW` encontrou o fluxo da EVA sem clicar em enviar.
 
 Somente depois disso o modo `TICKETLOG_PROVIDER_MODE=browser` deve ser testado com uma placa de homologacao e valor autorizado pela empresa.
+
+## Observacoes tecnicas confirmadas
+
+- A pagina `/register/fleet/vehicle/list` pode carregar a home mantendo a mesma URL; por isso a automacao nao considera a URL como prova de sucesso.
+- A lista correta exibe `Meus veiculos / equipamentos`, coluna `Placa / Identificador` e campo `Buscar na tabela`.
+- O formulario `Alteracao de Limite` roda dentro de iframe legado, nao no DOM principal.
+- Seletores estaveis observados no frame legado:
+  - `input[name="tipo"][value="AR"]` para `Adicionar o valor ao limite atual`;
+  - `input[name="fl_tipo_operacao"][value="SP"]` para `Somente para o periodo`;
+  - `input#valor` para o valor da alteracao;
+  - `input#ds_justifica` para motivo;
+  - `input[name="chklimite"]` na linha da placa;
+  - `input#btnAlterar` para o botao final, que o validador nao aciona.

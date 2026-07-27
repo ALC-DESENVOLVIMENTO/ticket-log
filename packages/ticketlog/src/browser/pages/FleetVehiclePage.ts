@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { formatCurrencyInput, IndeterminateResultError, ManualInterventionError, normalizePlate } from "@ticketlog/domain";
 
 export class FleetVehiclePage {
@@ -8,14 +8,22 @@ export class FleetVehiclePage {
     const url = process.env.TICKETLOG_VEHICLE_LIST_URL;
     if (!url) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
     await this.page.goto(url);
-    await expect(this.page.getByText(/ve.culos|placa/i).first()).toBeVisible();
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    if (!(await this.waitForVehicleListReady(5_000))) {
+      await this.clickVehicleListEntrypoint();
+    }
+
+    if (!(await this.waitForVehicleListReady())) {
+      throw new ManualInterventionError("VEHICLE_LIST_NOT_LOADED");
+    }
   }
 
   async searchPlate(plate: string): Promise<{ count: number; foundPlate?: string }> {
     const normalized = normalizePlate(plate);
     const plateSearch = await this.findVisible([
       this.page.getByLabel(/placa|identificador/i),
-      this.page.getByPlaceholder(/placa|identificador|pesquise|busque/i),
+      this.page.getByPlaceholder(/placa|identificador|pesquise|busque|buscar na tabela/i),
+      this.page.locator("input:visible").first(),
       this.page.getByRole("textbox").filter({ hasText: /placa|identificador/i }),
       this.page.getByRole("textbox").first(),
     ]);
@@ -27,6 +35,8 @@ export class FleetVehiclePage {
     } else {
       await plateSearch.press("Enter");
     }
+
+    await this.waitForPlateSearchResult(normalized);
 
     const rows = this.page.getByRole("row").filter({ hasText: normalized });
     const count = await rows.count();
@@ -41,10 +51,15 @@ export class FleetVehiclePage {
     ]);
     await plateLink.click();
     await expect(this.page.getByText(normalized)).toBeVisible();
+    await expect(this.page.getByText(/detalhes do ve.culo/i).first()).toBeVisible({ timeout: 30_000 }).catch(() => undefined);
   }
 
   async isBlocked(): Promise<boolean> {
-    return this.page.getByText(/bloquead[oa]/i).first().isVisible();
+    const activeBadge = this.page.getByText(/^ativo$/i).first();
+    if (await activeBadge.isVisible().catch(() => false)) return false;
+
+    const blockedBadge = this.page.getByText(/^bloquead[oa](?:\s|$)/i).first();
+    return blockedBadge.isVisible().catch(() => false);
   }
 
   async unblockVehicle(): Promise<void> {
@@ -62,19 +77,20 @@ export class FleetVehiclePage {
   }
 
   async addTemporaryLimit(input: { plate: string; amount: number; reason: string }): Promise<string> {
-    await this.openChangeLimitForm();
-    await this.page.getByLabel(/adicionar.*limite atual/i).check();
-    const valueField = await this.findVisible([
-      this.page.getByLabel(/valor para altera..o|valor/i),
-      this.page.getByRole("textbox").filter({ hasText: /valor/i }),
-      this.page.getByRole("spinbutton").first(),
-    ]);
+    const formFrame = await this.openChangeLimitForm();
+    await formFrame.locator("input[type='radio'][name='tipo'][value='AR']").first().check({ force: true });
+
+    const valueField = formFrame.locator("input#valor, input[name='valor']").first();
+    await expect(valueField).toBeVisible();
     await valueField.fill(formatCurrencyInput(input.amount));
-    await this.page.getByLabel(/somente para o per.odo/i).check();
-    await this.page.getByLabel(/motivo/i).fill(input.reason);
+    await formFrame.locator("input[type='radio'][name='fl_tipo_operacao'][value='SP']").first().check({ force: true });
+
+    const reasonField = formFrame.locator("input#ds_justifica, input[name='ds_justifica']").first();
+    await expect(reasonField).toBeVisible();
+    await reasonField.fill(input.reason);
 
     const normalizedPlate = normalizePlate(input.plate);
-    const row = this.page.getByRole("row").filter({ hasText: normalizedPlate });
+    const row = formFrame.locator("tr").filter({ hasText: normalizedPlate });
     const rowCount = await row.count();
     if (rowCount !== 1) {
       throw new ManualInterventionError(
@@ -82,10 +98,10 @@ export class FleetVehiclePage {
       );
     }
 
-    await row.first().getByRole("checkbox").check();
-    await this.page.getByRole("button", { name: /^alterar$/i }).click();
+    await row.first().locator("input[type='checkbox'][name='chklimite']").first().check({ force: true });
+    await formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first().click();
 
-    const confirmation = this.page.getByText(/alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso/i).first();
+    const confirmation = formFrame.getByText(/alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso/i).first();
     try {
       await expect(confirmation).toBeVisible({ timeout: 45_000 });
     } catch {
@@ -94,19 +110,61 @@ export class FleetVehiclePage {
     return confirmation.innerText();
   }
 
-  private async openChangeLimitForm(): Promise<void> {
-    if (await this.page.getByText(/altera..o de limite/i).first().isVisible().catch(() => false)) {
+  private async openChangeLimitForm(): Promise<Page | Frame> {
+    const openedFrame = await this.waitForChangeLimitFrame(1_000);
+    if (openedFrame) {
+      return openedFrame;
+    }
+
+    await this.clickChangeLimitEntrypoint();
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    const formFrame = await this.waitForChangeLimitFrame();
+    if (!formFrame) {
+      throw new ManualInterventionError("CHANGE_LIMIT_FORM_NOT_LOADED");
+    }
+    return formFrame;
+  }
+
+  private async clickChangeLimitEntrypoint(): Promise<void> {
+    const direct = await this.findVisible([
+      this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
+      this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
+    ]).catch(() => null);
+
+    if (direct) {
+      if (await this.clickAndConfirmChangeLimit(direct)) return;
+    }
+
+    const text = this.page.getByText(/^\s*alterar\s+limite\s*$/i).first();
+    if (!(await text.isVisible().catch(() => false))) {
+      throw new ManualInterventionError("CHANGE_LIMIT_ENTRYPOINT_NOT_FOUND");
+    }
+
+    await text.scrollIntoViewIfNeeded();
+    const clickableCard = text.locator(
+      "xpath=ancestor::*[self::button or self::a or @role='button' or contains(@class,'card') or contains(@class,'Card')][1]",
+    );
+
+    if (await this.clickAndConfirmChangeLimit(clickableCard)) return;
+    if (await this.clickAndConfirmChangeLimit(text)) return;
+    if (await this.clickVisualCardCenter(text)) return;
+
+    throw new ManualInterventionError("CHANGE_LIMIT_CLICK_DID_NOT_OPEN_FORM");
+  }
+
+  private async checkOptionByText(scope: Page | Frame, name: RegExp): Promise<void> {
+    const label = scope.getByText(name).first();
+    if (!(await label.isVisible().catch(() => false))) {
+      throw new ManualInterventionError("OPTION_NOT_FOUND");
+    }
+
+    const input = label.locator("xpath=preceding::input[@type='radio' or @type='checkbox'][1]");
+    if (await input.isVisible().catch(() => false)) {
+      await input.check();
       return;
     }
 
-    const entrypoint = await this.findVisible([
-      this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
-      this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
-      this.page.getByText(/altera..o de limite|alterar limite/i).first(),
-    ]);
-
-    await entrypoint.click();
-    await expect(this.page.getByText(/altera..o de limite/i).first()).toBeVisible();
+    await label.click();
   }
 
   private async findVisible(candidates: Locator[]): Promise<Locator> {
@@ -118,5 +176,124 @@ export class FleetVehiclePage {
     }
 
     throw new ManualInterventionError("VISIBLE_LOCATOR_NOT_FOUND");
+  }
+
+  private async waitForPlateSearchResult(plate: string): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const rows = this.page.getByRole("row").filter({ hasText: plate });
+      if ((await rows.count()) > 0) return;
+
+      const emptyState = this.page.getByText(/nenhum registro|nenhum resultado|n.o encontrado|sem resultado/i).first();
+      if (await emptyState.isVisible().catch(() => false)) return;
+
+      await this.page.waitForTimeout(500);
+    }
+  }
+
+  private async waitForVehicleListReady(timeoutMs = 30_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const signals = [
+        this.page.getByPlaceholder(/buscar na tabela/i).first(),
+        this.page.getByText(/meus ve.culos\s*\/\s*equipamentos/i).first(),
+        this.page.getByText(/placa\s*\/\s*identificador/i).first(),
+      ];
+
+      for (const signal of signals) {
+        if (await signal.isVisible().catch(() => false)) return true;
+      }
+
+      await this.page.waitForTimeout(500);
+    }
+
+    return false;
+  }
+
+  private async clickVehicleListEntrypoint(): Promise<void> {
+    const entrypoint = await this.findVisible([
+      this.page.getByText(/^\s*ve.culo\s*$/i).first(),
+      this.page.getByText(/^\s*equipamento\s*$/i).first(),
+      this.page.getByRole("link", { name: /ve.culo|equipamento/i }).first(),
+    ]);
+
+    await entrypoint.scrollIntoViewIfNeeded().catch(() => undefined);
+    await entrypoint.click().catch(async () => {
+      const box = await entrypoint.boundingBox();
+      if (!box) throw new ManualInterventionError("VEHICLE_LIST_ENTRYPOINT_NOT_CLICKABLE");
+      await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    });
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+  }
+
+  private async clickAndConfirmChangeLimit(locator: Locator): Promise<boolean> {
+    if (!(await locator.isVisible().catch(() => false))) return false;
+
+    await locator.click().catch(() => undefined);
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+    return this.waitForChangeLimitForm();
+  }
+
+  private async clickVisualCardCenter(text: Locator): Promise<boolean> {
+    const centers = await text.evaluate((element) => {
+      const candidates: Array<{ x: number; y: number }> = [];
+      const textRect = element.getBoundingClientRect();
+      candidates.push({
+        x: textRect.left + textRect.width / 2,
+        y: textRect.top + textRect.height / 2,
+      });
+      candidates.push({
+        x: textRect.left + textRect.width / 2,
+        y: textRect.top - 70,
+      });
+      let current: HTMLElement | null = element instanceof HTMLElement ? element : element.parentElement;
+
+      for (let index = 0; current && index < 8; index += 1) {
+        const rect = current.getBoundingClientRect();
+        if (rect.width >= 80 && rect.height >= 60) {
+          candidates.push({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          });
+        }
+        current = current.parentElement;
+      }
+
+      return candidates;
+    });
+
+    for (const center of centers) {
+      await this.page.mouse.click(center.x, center.y);
+      await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      if (await this.waitForChangeLimitForm()) return true;
+    }
+
+    return false;
+  }
+
+  private async waitForChangeLimitForm(timeoutMs = 45_000): Promise<boolean> {
+    return (await this.waitForChangeLimitFrame(timeoutMs)) !== null;
+  }
+
+  private async waitForChangeLimitFrame(timeoutMs = 45_000): Promise<Page | Frame | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+        if (
+          /valor\s+para\s+altera/i.test(bodyText) &&
+          /adicionar\s+o\s+valor\s+ao\s+limite\s+atual/i.test(bodyText)
+        ) {
+          return scope;
+        }
+      }
+
+      await this.page.waitForTimeout(500);
+    }
+
+    return null;
   }
 }
