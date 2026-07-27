@@ -32,9 +32,11 @@ TICKETLOG_LOGIN_URL=https://URL-DE-LOGIN-DA-TICKETLOG
 TICKETLOG_VEHICLE_LIST_URL=https://plataforma.ticketlog.com.br/register/fleet/vehicle/list
 TICKETLOG_VALIDATE_PLATE=ABC1D23
 TICKETLOG_SESSION_STORAGE_PATH=.secrets/ticketlog-storage.json
+TICKETLOG_USER_DATA_DIR=.secrets/ticketlog-profile
 TICKETLOG_HEADLESS=false
 TICKETLOG_KEEP_BROWSER_OPEN=true
 TICKETLOG_ALLOW_MANUAL_LOGIN=true
+TICKETLOG_MANUAL_LOGIN_CONTINUE=enter
 TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS=600000
 ```
 
@@ -45,7 +47,9 @@ TICKETLOG_USERNAME=usuario-corporativo
 TICKETLOG_PASSWORD=senha-corporativa
 ```
 
-Se houver MFA, CAPTCHA ou confirmacao corporativa, use `TICKETLOG_ALLOW_MANUAL_LOGIN=true`. O navegador abre, voce conclui o login manualmente, e a validacao continua quando a pagina de veiculos ficar acessivel.
+Se houver SMS, MFA, CAPTCHA ou confirmacao corporativa, use `TICKETLOG_ALLOW_MANUAL_LOGIN=true`. O navegador abre, voce conclui o login manualmente e, quando estiver dentro da Ticket Log, pressiona Enter no terminal para a validacao continuar.
+
+Use `TICKETLOG_USER_DATA_DIR=.secrets/ticketlog-profile` para manter um perfil persistente do Chromium. Esse perfil preserva cookies, localStorage e cache entre execucoes, ajudando a evitar reCAPTCHA repetido quando a propria Ticket Log considera a sessao confiavel.
 
 ## Como executar
 
@@ -57,7 +61,7 @@ npm.cmd run validate:browser -w @ticketlog/ticketlog
 
 Com `TICKETLOG_KEEP_BROWSER_OPEN=true`, o navegador fica aberto ao final da validacao. Pressione Enter no terminal para fechar.
 
-Com `TICKETLOG_ALLOW_MANUAL_LOGIN=true`, nao feche a janela depois do login. Deixe o Playwright continuar; ele navegara para a lista de veiculos automaticamente.
+Com `TICKETLOG_ALLOW_MANUAL_LOGIN=true`, nao feche a janela depois do login. Termine o codigo por celular/MFA no navegador e pressione Enter no terminal. Somente depois disso o Playwright navegara para a lista de veiculos.
 
 Opcionalmente defina um caminho de saida:
 

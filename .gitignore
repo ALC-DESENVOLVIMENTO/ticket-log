@@ -4,6 +4,7 @@ dist-types
 .env
 .env.*
 !.env.example
+.secrets/
 playwright-report
 test-results
 storage-state

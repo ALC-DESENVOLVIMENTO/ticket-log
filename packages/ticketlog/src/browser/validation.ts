@@ -28,6 +28,11 @@ interface ValidationOptions {
   outputPath?: string;
 }
 
+interface BrowserSession {
+  context: BrowserContext;
+  close(): Promise<void>;
+}
+
 const safeGuards = [
   "Nao clica no botao final Alterar",
   "Nao confirma desbloqueio de veiculo",
@@ -39,8 +44,8 @@ export class BrowserTicketLogValidator {
   async validateReadOnly(options: ValidationOptions): Promise<TicketLogValidationReport> {
     const startedAt = new Date().toISOString();
     const steps: TicketLogValidationStep[] = [];
-    const browser = await chromium.launch({ headless: process.env.TICKETLOG_HEADLESS !== "false" });
-    const context = await this.createContext(browser);
+    const session = await this.createBrowserSession();
+    const context = session.context;
     const page = await context.newPage();
     const vehiclePlate = normalizePlate(options.vehiclePlate);
 
@@ -90,17 +95,36 @@ export class BrowserTicketLogValidator {
       await runStep("INSPECT_CHANGE_LIMIT_FORM", () => this.inspectChangeLimitForm(page, vehiclePlate));
       await runStep("INSPECT_EVA_FLOW", () => this.inspectEvaFlow(page, vehiclePlate));
 
-      if (process.env.TICKETLOG_SESSION_STORAGE_PATH) {
-        await context.storageState({ path: process.env.TICKETLOG_SESSION_STORAGE_PATH });
-      }
+      await saveStorageState(context);
 
       return this.finishReport({ startedAt, steps, vehiclePlate, outputPath: options.outputPath });
     } finally {
       if (process.env.TICKETLOG_KEEP_BROWSER_OPEN === "true") {
         await waitBeforeClosingBrowser();
       }
-      await browser.close();
+      await session.close();
     }
+  }
+
+  private async createBrowserSession(): Promise<BrowserSession> {
+    const headless = process.env.TICKETLOG_HEADLESS !== "false";
+    const userDataDir = process.env.TICKETLOG_USER_DATA_DIR;
+
+    if (userDataDir) {
+      await mkdir(userDataDir, { recursive: true });
+      const context = await chromium.launchPersistentContext(userDataDir, { headless });
+      return {
+        context,
+        close: () => context.close(),
+      };
+    }
+
+    const browser = await chromium.launch({ headless });
+    const context = await this.createContext(browser);
+    return {
+      context,
+      close: () => browser.close(),
+    };
   }
 
   private async createContext(browser: Browser): Promise<BrowserContext> {
@@ -152,35 +176,40 @@ export class BrowserTicketLogValidator {
     const vehicleListUrl = process.env.TICKETLOG_VEHICLE_LIST_URL;
     if (!vehicleListUrl) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
 
-    const timeoutMs = Number(process.env.TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS ?? 10 * 60_000);
-    const startedAt = Date.now();
     console.error(
-      "TICKETLOG_ALLOW_MANUAL_LOGIN=true: faca login, MFA/reCAPTCHA se aparecer, e aguarde. A validacao continuara automaticamente.",
+      "TICKETLOG_ALLOW_MANUAL_LOGIN=true: faca login, SMS/MFA/reCAPTCHA se aparecer, e pressione Enter no terminal quando estiver dentro da Ticket Log.",
     );
 
-    while (Date.now() - startedAt < timeoutMs) {
-      if (page.isClosed()) {
-        throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+    if (process.env.TICKETLOG_MANUAL_LOGIN_CONTINUE !== "auto" && process.stdin.isTTY) {
+      await waitForEnter("Pressione Enter apos concluir login/codigo no navegador...");
+    } else {
+      const timeoutMs = Number(process.env.TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS ?? 10 * 60_000);
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (page.isClosed()) throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+        const loginFieldStillVisible = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
+        const passwordFieldStillVisible = await isVisible(page.getByLabel(/senha/i));
+        if (!loginFieldStillVisible && !passwordFieldStillVisible) break;
+        await page.waitForTimeout(1500);
       }
-
-      const loginFieldStillVisible = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
-      const passwordFieldStillVisible = await isVisible(page.getByLabel(/senha/i));
-
-      if (!loginFieldStillVisible && !passwordFieldStillVisible) {
-        await page.goto(vehicleListUrl);
-        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-
-        const loginReturned = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
-        const vehiclePageVisible = await isVisible(page.getByText(/ve.culos|placa/i));
-        if (!loginReturned && vehiclePageVisible) {
-          return "Login manual concluido e pagina de veiculos acessivel";
-        }
-      }
-
-      await page.waitForTimeout(1500);
     }
 
-    throw new ManualInterventionError("MANUAL_LOGIN_TIMEOUT");
+    if (page.isClosed()) {
+      throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+    }
+
+    await saveStorageState(page.context());
+    await page.goto(vehicleListUrl);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+    const loginReturned = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
+    const vehiclePageVisible = await isVisible(page.getByText(/ve.culos|placa/i));
+    if (loginReturned || !vehiclePageVisible) {
+      throw new ManualInterventionError("MANUAL_LOGIN_NOT_CONFIRMED");
+    }
+
+    await saveStorageState(page.context());
+    return "Login manual concluido, sessao salva e pagina de veiculos acessivel";
   }
 
   private async openVehicleList(page: Page): Promise<string> {
@@ -350,4 +379,23 @@ async function waitBeforeClosingBrowser(): Promise<void> {
       resolve();
     });
   });
+}
+
+async function waitForEnter(message: string): Promise<void> {
+  console.error(message);
+  process.stdin.resume();
+  await new Promise<void>((resolve) => {
+    process.stdin.once("data", () => {
+      process.stdin.pause();
+      resolve();
+    });
+  });
+}
+
+async function saveStorageState(context: BrowserContext): Promise<void> {
+  const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
+  if (!storageState) return;
+
+  await mkdir(dirname(storageState), { recursive: true });
+  await context.storageState({ path: storageState });
 }
