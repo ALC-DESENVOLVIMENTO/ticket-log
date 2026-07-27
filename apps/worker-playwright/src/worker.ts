@@ -10,7 +10,22 @@ const worker = new Worker<LimitJobData>(
   limitQueueName,
   async (job) => {
     logger.info({ jobId: job.id, requestId: job.data.requestId }, "processing limit request");
-    await processLimitRequest(job.data.requestId);
+    try {
+      await processLimitRequest(job.data.requestId);
+    } catch (error) {
+      logger.error(
+        {
+          jobId: job.id,
+          requestId: job.data.requestId,
+          errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorCode: typeof error === "object" && error && "code" in error ? (error as any).code : undefined,
+          errorStack: error instanceof Error ? error.stack : undefined,
+        },
+        "processing limit request failed inside worker",
+      );
+      throw error;
+    }
   },
   {
     connection: getRedis(),
@@ -24,7 +39,17 @@ worker.on("completed", (job) => {
 });
 
 worker.on("failed", (job, error) => {
-  logger.error({ jobId: job?.id, requestId: job?.data.requestId, error }, "job failed");
+  logger.error(
+    {
+      jobId: job?.id,
+      requestId: job?.data.requestId,
+      errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorCode: typeof error === "object" && error && "code" in error ? (error as any).code : undefined,
+      errorStack: error instanceof Error ? error.stack : undefined,
+    },
+    "job failed",
+  );
 });
 
 process.on("SIGTERM", async () => {
