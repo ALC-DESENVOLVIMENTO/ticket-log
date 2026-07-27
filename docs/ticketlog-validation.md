@@ -58,6 +58,13 @@ Se houver SMS, MFA, CAPTCHA ou confirmacao corporativa, use `TICKETLOG_ALLOW_MAN
 
 Use `TICKETLOG_USER_DATA_DIR=.secrets/ticketlog-profile` para manter um perfil persistente do Chromium. Esse perfil preserva cookies, localStorage e cache entre execucoes, ajudando a evitar reCAPTCHA repetido quando a propria Ticket Log considera a sessao confiavel.
 
+No Railway, prefira um volume persistente montado em `/data` com:
+
+```env
+TICKETLOG_USER_DATA_DIR=/data/ticketlog-session/profile
+TICKETLOG_SESSION_STORAGE_PATH=/data/ticketlog-session/storage-state.json
+```
+
 No fluxo observado, a Ticket Log tambem pode perguntar se o navegador deve ser considerado confiavel. Essa escolha deve ser feita manualmente conforme a politica da empresa; o robo nao clica nessa confirmacao.
 
 ## Como executar

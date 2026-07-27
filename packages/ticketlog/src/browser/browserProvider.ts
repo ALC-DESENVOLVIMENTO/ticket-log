@@ -5,6 +5,7 @@ import { normalizePlate, ManualInterventionError } from "@ticketlog/domain";
 import type { TicketLogLimitInput, TicketLogLimitResult, TicketLogProvider } from "../provider.js";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
+import { hasStorageStateFile, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
 
 interface BrowserSession {
   context: BrowserContext;
@@ -79,7 +80,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
   private async createBrowserSession(): Promise<BrowserSession> {
     const headless = process.env.TICKETLOG_HEADLESS !== "false";
-    const userDataDir = process.env.TICKETLOG_USER_DATA_DIR;
+    const userDataDir = resolveUserDataDir();
 
     if (userDataDir) {
       await mkdir(userDataDir, { recursive: true });
@@ -99,12 +100,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   }
 
   private async createContext(browser: Browser): Promise<BrowserContext> {
-    const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
-    return browser.newContext(storageState ? { storageState } : {});
+    const storageState = resolveStorageStatePath();
+    if (!storageState) return browser.newContext();
+    if (!(await hasStorageStateFile())) return browser.newContext();
+    return browser.newContext({ storageState });
   }
 
   private async saveStorageState(context: BrowserContext): Promise<void> {
-    const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
+    const storageState = resolveStorageStatePath();
     if (!storageState) return;
     await mkdir(dirname(storageState), { recursive: true });
     await context.storageState({ path: storageState });
@@ -135,6 +138,12 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await userField.fill(username);
       await page.getByLabel(/senha/i).fill(password);
       await page.getByRole("button", { name: /entrar|acessar|login/i }).click();
+    }
+
+    const loginFieldStillVisible = await page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false);
+    const passwordFieldStillVisible = await page.getByLabel(/senha/i).first().isVisible().catch(() => false);
+    if (loginFieldStillVisible || passwordFieldStillVisible) {
+      throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
     }
   }
 

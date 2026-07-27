@@ -1,9 +1,10 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { chromium, expect, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "@playwright/test";
 import { ManualInterventionError, normalizePlate } from "@ticketlog/domain";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
+import { hasStorageStateFile, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
 
 type StepStatus = "PASSED" | "FAILED" | "SKIPPED";
 
@@ -136,7 +137,7 @@ export class BrowserTicketLogValidator {
 
   private async createBrowserSession(): Promise<BrowserSession> {
     const headless = process.env.TICKETLOG_HEADLESS !== "false";
-    const userDataDir = process.env.TICKETLOG_USER_DATA_DIR;
+    const userDataDir = resolveUserDataDir();
 
     if (userDataDir) {
       await mkdir(userDataDir, { recursive: true });
@@ -156,15 +157,10 @@ export class BrowserTicketLogValidator {
   }
 
   private async createContext(browser: Browser): Promise<BrowserContext> {
-    const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
+    const storageState = resolveStorageStatePath();
     if (!storageState) return browser.newContext();
-
-    try {
-      await access(storageState);
-      return browser.newContext({ storageState });
-    } catch {
-      return browser.newContext();
-    }
+    if (!(await hasStorageStateFile())) return browser.newContext();
+    return browser.newContext({ storageState });
   }
 
   private async ensureAuthenticated(page: Page): Promise<string> {
@@ -459,6 +455,14 @@ async function waitForPlateSearchResult(page: Page, plate: string): Promise<void
 async function waitForVehicleListReady(page: Page, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i))) {
+      throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
+    }
+
+    if (await isVisible(page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first())) {
+      throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+    }
+
     const signals = [
       page.getByPlaceholder(/buscar na tabela/i).first(),
       page.getByText(/meus ve.culos\s*\/\s*equipamentos/i).first(),
@@ -633,7 +637,7 @@ async function waitForEnter(message: string): Promise<void> {
 }
 
 async function saveStorageState(context: BrowserContext): Promise<void> {
-  const storageState = process.env.TICKETLOG_SESSION_STORAGE_PATH;
+  const storageState = resolveStorageStatePath();
   if (!storageState) return;
 
   await mkdir(dirname(storageState), { recursive: true });
