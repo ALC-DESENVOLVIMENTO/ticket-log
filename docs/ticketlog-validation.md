@@ -33,6 +33,7 @@ TICKETLOG_VEHICLE_LIST_URL=https://plataforma.ticketlog.com.br/register/fleet/ve
 TICKETLOG_VALIDATE_PLATE=ABC1D23
 TICKETLOG_SESSION_STORAGE_PATH=.secrets/ticketlog-storage.json
 TICKETLOG_HEADLESS=false
+TICKETLOG_KEEP_BROWSER_OPEN=true
 ```
 
 Se a conta puder fazer login sem etapa humana:
@@ -51,6 +52,8 @@ npm.cmd run build -w @ticketlog/ticketlog
 $env:TICKETLOG_VALIDATE_PLATE="ABC1D23"
 npm.cmd run validate:browser -w @ticketlog/ticketlog
 ```
+
+Com `TICKETLOG_KEEP_BROWSER_OPEN=true`, o navegador fica aberto ao final da validacao. Pressione Enter no terminal para fechar.
 
 Opcionalmente defina um caminho de saida:
 

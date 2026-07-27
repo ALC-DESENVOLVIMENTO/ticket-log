@@ -96,6 +96,9 @@ export class BrowserTicketLogValidator {
 
       return this.finishReport({ startedAt, steps, vehiclePlate, outputPath: options.outputPath });
     } finally {
+      if (process.env.TICKETLOG_KEEP_BROWSER_OPEN === "true") {
+        await waitBeforeClosingBrowser();
+      }
       await browser.close();
     }
   }
@@ -280,4 +283,29 @@ function maskPlate(plate: string): string {
 
 async function isVisible(locator: Locator): Promise<boolean> {
   return locator.first().isVisible().catch(() => false);
+}
+
+async function waitBeforeClosingBrowser(): Promise<void> {
+  const timeoutMs = Number(process.env.TICKETLOG_KEEP_BROWSER_OPEN_MS ?? 0);
+
+  if (timeoutMs > 0) {
+    console.error(`TICKETLOG_KEEP_BROWSER_OPEN=true: mantendo navegador aberto por ${timeoutMs}ms.`);
+    await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    console.error("TICKETLOG_KEEP_BROWSER_OPEN=true: stdin nao interativo; navegador permanecera aberto por 5 minutos.");
+    await new Promise((resolve) => setTimeout(resolve, 5 * 60_000));
+    return;
+  }
+
+  console.error("TICKETLOG_KEEP_BROWSER_OPEN=true: pressione Enter no terminal para fechar o navegador.");
+  process.stdin.resume();
+  await new Promise<void>((resolve) => {
+    process.stdin.once("data", () => {
+      process.stdin.pause();
+      resolve();
+    });
+  });
 }
