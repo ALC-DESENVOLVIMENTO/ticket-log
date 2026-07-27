@@ -121,24 +121,37 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
-  private async ensureAuthenticated(page: { goto(url: string): Promise<unknown>; getByLabel(label: RegExp): any; getByRole(role: string, options: any): any; getByText(text: RegExp): any }): Promise<void> {
+  private async ensureAuthenticated(page: Page): Promise<void> {
     const loginUrl = process.env.TICKETLOG_LOGIN_URL;
     if (!loginUrl) return;
 
     await page.goto(loginUrl);
-    if (await page.getByText(/captcha|mfa|autenticador|c.digo/i).first().isVisible().catch(() => false)) {
+    if (await page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
       throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
     }
 
     const username = process.env.TICKETLOG_USERNAME;
     const password = process.env.TICKETLOG_PASSWORD;
-    if (!username || !password) return;
+    const userField = page.getByLabel(/usu.rio|e-mail|email|login/i).first();
+    const passwordField = page.getByLabel(/senha/i).first();
+    const userFieldVisible = await userField.isVisible().catch(() => false);
+    const passwordFieldVisible = await passwordField.isVisible().catch(() => false);
 
-    const userField = page.getByLabel(/usu.rio|e-mail|email|login/i);
-    if (await userField.isVisible().catch(() => false)) {
-      await userField.fill(username);
-      await page.getByLabel(/senha/i).fill(password);
+    if ((userFieldVisible || passwordFieldVisible) && (!username || !password)) {
+      throw new ManualInterventionError("TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN");
+    }
+
+    if (userFieldVisible) {
+      const safeUsername = username as string;
+      const safePassword = password as string;
+      await userField.fill(safeUsername);
+      await passwordField.fill(safePassword);
       await page.getByRole("button", { name: /entrar|acessar|login/i }).click();
+      await page.goto(process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list");
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      if (await page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
+        throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+      }
     }
 
     const loginFieldStillVisible = await page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false);

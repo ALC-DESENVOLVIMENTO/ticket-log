@@ -50,8 +50,8 @@ export class FleetVehiclePage {
       this.page.getByText(normalized, { exact: false }).first(),
     ]);
     await plateLink.click();
-    await expect(this.page.getByText(normalized)).toBeVisible();
-    await expect(this.page.getByText(/detalhes do ve.culo/i).first()).toBeVisible({ timeout: 30_000 }).catch(() => undefined);
+    await expect(this.page.getByText(normalized).first()).toBeVisible();
+    await expect(this.page.getByText(/detalhes do ve.culo/i).first()).toBeVisible({ timeout: 30_000 });
   }
 
   async isBlocked(): Promise<boolean> {
@@ -113,12 +113,14 @@ export class FleetVehiclePage {
   }
 
   private async clickChangeLimitEntrypoint(): Promise<void> {
+    const attempts: string[] = [];
     const direct = await this.findVisible([
       this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
       this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
     ]).catch(() => null);
 
     if (direct) {
+      attempts.push("direct-role");
       if (await this.clickAndConfirmChangeLimit(direct)) return;
     }
 
@@ -132,11 +134,15 @@ export class FleetVehiclePage {
       "xpath=ancestor::*[self::button or self::a or @role='button' or contains(@class,'card') or contains(@class,'Card')][1]",
     );
 
+    attempts.push("ancestor-card");
     if (await this.clickAndConfirmChangeLimit(clickableCard)) return;
+    attempts.push("text");
     if (await this.clickAndConfirmChangeLimit(text)) return;
+    attempts.push("visual-centers");
     if (await this.clickVisualCardCenter(text)) return;
 
-    throw new ManualInterventionError("CHANGE_LIMIT_CLICK_DID_NOT_OPEN_FORM");
+    attempts.push(`url:${this.page.url()}`);
+    throw new ManualInterventionError(`CHANGE_LIMIT_CLICK_DID_NOT_OPEN_FORM:${attempts.join("|")}`);
   }
 
   private async checkOptionByText(scope: Page | Frame, name: RegExp): Promise<void> {
@@ -238,6 +244,14 @@ export class FleetVehiclePage {
   private async waitForVehicleListReady(timeoutMs = 30_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (await this.page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false)) {
+        throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
+      }
+
+      if (await this.page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
+        throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+      }
+
       const signals = [
         this.page.getByPlaceholder(/buscar na tabela/i).first(),
         this.page.getByText(/meus ve.culos\s*\/\s*equipamentos/i).first(),
