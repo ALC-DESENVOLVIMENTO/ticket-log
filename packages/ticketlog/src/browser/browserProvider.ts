@@ -5,7 +5,7 @@ import { normalizePlate, ManualInterventionError } from "@ticketlog/domain";
 import type { TicketLogLimitInput, TicketLogLimitResult, TicketLogProvider } from "../provider.js";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
-import { hasStorageStateFile, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
+import { hasStorageStateFile, hasUserDataDirState, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
 
 interface BrowserSession {
   context: BrowserContext;
@@ -81,8 +81,9 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   private async createBrowserSession(): Promise<BrowserSession> {
     const headless = process.env.TICKETLOG_HEADLESS !== "false";
     const userDataDir = resolveUserDataDir();
+    const canUsePersistentProfile = userDataDir ? await hasUserDataDirState() : false;
 
-    if (userDataDir) {
+    if (userDataDir && canUsePersistentProfile) {
       await mkdir(userDataDir, { recursive: true });
       const context = await chromium.launchPersistentContext(userDataDir, { headless });
       return {

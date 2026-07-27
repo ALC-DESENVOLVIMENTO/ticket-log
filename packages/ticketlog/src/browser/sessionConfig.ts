@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 
 const railwaySessionDir = "/data/ticketlog-session";
 
@@ -17,6 +17,18 @@ export async function hasStorageStateFile(): Promise<boolean> {
   try {
     await access(storageState);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function hasUserDataDirState(): Promise<boolean> {
+  const userDataDir = resolveUserDataDir();
+  if (!userDataDir) return false;
+
+  try {
+    const entries = await readdir(userDataDir);
+    return entries.length > 0;
   } catch {
     return false;
   }

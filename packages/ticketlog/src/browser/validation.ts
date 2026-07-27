@@ -4,7 +4,7 @@ import { chromium, expect, type Browser, type BrowserContext, type Frame, type L
 import { ManualInterventionError, normalizePlate } from "@ticketlog/domain";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
-import { hasStorageStateFile, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
+import { hasStorageStateFile, hasUserDataDirState, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
 
 type StepStatus = "PASSED" | "FAILED" | "SKIPPED";
 
@@ -138,8 +138,9 @@ export class BrowserTicketLogValidator {
   private async createBrowserSession(): Promise<BrowserSession> {
     const headless = process.env.TICKETLOG_HEADLESS !== "false";
     const userDataDir = resolveUserDataDir();
+    const canUsePersistentProfile = userDataDir ? await hasUserDataDirState() : false;
 
-    if (userDataDir) {
+    if (userDataDir && canUsePersistentProfile) {
       await mkdir(userDataDir, { recursive: true });
       const context = await chromium.launchPersistentContext(userDataDir, { headless });
       return {
