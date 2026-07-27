@@ -17,4 +17,4 @@ RUN npm install @rolldown/binding-linux-x64-gnu@1.1.5 --no-save
 COPY . .
 RUN npm run build:web
 
-CMD ["npm", "run", "start", "-w", "@ticketlog/web", "--", "--port", "3000"]
+CMD ["sh", "-c", "npm run start -w @ticketlog/web -- --port ${PORT:-3000}"]
