@@ -34,6 +34,8 @@ TICKETLOG_VALIDATE_PLATE=ABC1D23
 TICKETLOG_SESSION_STORAGE_PATH=.secrets/ticketlog-storage.json
 TICKETLOG_HEADLESS=false
 TICKETLOG_KEEP_BROWSER_OPEN=true
+TICKETLOG_ALLOW_MANUAL_LOGIN=true
+TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS=600000
 ```
 
 Se a conta puder fazer login sem etapa humana:
@@ -43,7 +45,7 @@ TICKETLOG_USERNAME=usuario-corporativo
 TICKETLOG_PASSWORD=senha-corporativa
 ```
 
-Se houver MFA, CAPTCHA ou confirmacao corporativa, faca login manualmente com `TICKETLOG_HEADLESS=false`. O sistema deve parar e registrar `UNEXPECTED_CAPTCHA_OR_MFA` quando a validacao nao puder continuar de forma legitima.
+Se houver MFA, CAPTCHA ou confirmacao corporativa, use `TICKETLOG_ALLOW_MANUAL_LOGIN=true`. O navegador abre, voce conclui o login manualmente, e a validacao continua quando a pagina de veiculos ficar acessivel.
 
 ## Como executar
 
@@ -54,6 +56,8 @@ npm.cmd run validate:browser -w @ticketlog/ticketlog
 ```
 
 Com `TICKETLOG_KEEP_BROWSER_OPEN=true`, o navegador fica aberto ao final da validacao. Pressione Enter no terminal para fechar.
+
+Com `TICKETLOG_ALLOW_MANUAL_LOGIN=true`, nao feche a janela depois do login. Deixe o Playwright continuar; ele navegara para a lista de veiculos automaticamente.
 
 Opcionalmente defina um caminho de saida:
 

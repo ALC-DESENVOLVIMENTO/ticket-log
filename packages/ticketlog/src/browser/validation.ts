@@ -32,7 +32,7 @@ const safeGuards = [
   "Nao clica no botao final Alterar",
   "Nao confirma desbloqueio de veiculo",
   "Nao envia solicitacao para a EVA",
-  "Interrompe quando encontra CAPTCHA, MFA ou confirmacao inesperada",
+  "Interrompe quando encontra CAPTCHA, MFA ou confirmacao inesperada fora do modo manual",
 ];
 
 export class BrowserTicketLogValidator {
@@ -117,8 +117,12 @@ export class BrowserTicketLogValidator {
 
   private async ensureAuthenticated(page: Page): Promise<string> {
     const loginUrl = process.env.TICKETLOG_LOGIN_URL;
+    const allowManualLogin = process.env.TICKETLOG_ALLOW_MANUAL_LOGIN === "true";
     if (loginUrl) {
       await page.goto(loginUrl);
+      if (allowManualLogin) {
+        return this.waitForManualLogin(page);
+      }
       await this.stopOnHumanChallenge(page);
     }
 
@@ -128,6 +132,9 @@ export class BrowserTicketLogValidator {
 
     if (await isVisible(userField)) {
       if (!username || !password) {
+        if (allowManualLogin) {
+          return this.waitForManualLogin(page);
+        }
         throw new ManualInterventionError("TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN");
       }
 
@@ -139,6 +146,41 @@ export class BrowserTicketLogValidator {
     }
 
     return "Sessao autenticada ou login basico concluido";
+  }
+
+  private async waitForManualLogin(page: Page): Promise<string> {
+    const vehicleListUrl = process.env.TICKETLOG_VEHICLE_LIST_URL;
+    if (!vehicleListUrl) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
+
+    const timeoutMs = Number(process.env.TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS ?? 10 * 60_000);
+    const startedAt = Date.now();
+    console.error(
+      "TICKETLOG_ALLOW_MANUAL_LOGIN=true: faca login, MFA/reCAPTCHA se aparecer, e aguarde. A validacao continuara automaticamente.",
+    );
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (page.isClosed()) {
+        throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+      }
+
+      const loginFieldStillVisible = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
+      const passwordFieldStillVisible = await isVisible(page.getByLabel(/senha/i));
+
+      if (!loginFieldStillVisible && !passwordFieldStillVisible) {
+        await page.goto(vehicleListUrl);
+        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+        const loginReturned = await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i));
+        const vehiclePageVisible = await isVisible(page.getByText(/ve.culos|placa/i));
+        if (!loginReturned && vehiclePageVisible) {
+          return "Login manual concluido e pagina de veiculos acessivel";
+        }
+      }
+
+      await page.waitForTimeout(1500);
+    }
+
+    throw new ManualInterventionError("MANUAL_LOGIN_TIMEOUT");
   }
 
   private async openVehicleList(page: Page): Promise<string> {
