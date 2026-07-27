@@ -14,6 +14,6 @@ COPY packages/whatsapp/package.json packages/whatsapp/package.json
 RUN npm install
 
 COPY . .
-RUN npm run build
+RUN npm run build:api
 
 CMD ["npm", "run", "start", "-w", "@ticketlog/api"]

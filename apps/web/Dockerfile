@@ -11,9 +11,10 @@ COPY packages/queue/package.json packages/queue/package.json
 COPY packages/ticketlog/package.json packages/ticketlog/package.json
 COPY packages/whatsapp/package.json packages/whatsapp/package.json
 
-RUN npm install
+RUN npm install --include=optional
+RUN npm install @rolldown/binding-linux-x64-gnu@1.1.5 --no-save
 
 COPY . .
-RUN npm run build -w @ticketlog/web
+RUN npm run build:web
 
 CMD ["npm", "run", "start", "-w", "@ticketlog/web", "--", "--port", "3000"]
