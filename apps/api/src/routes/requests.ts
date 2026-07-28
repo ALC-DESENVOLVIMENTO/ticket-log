@@ -171,10 +171,18 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const params = request.params as { id: string };
     const found = await getRequest(params.id);
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
-    if (!["FALHA_REPROCESSAVEL", "FALHA_MANUAL"].includes(found.status)) {
+    if (!["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"].includes(found.status)) {
       return reply.code(409).send({ error: "REQUEST_NOT_RETRYABLE" });
     }
-    await transitionRequest(found.id, "NA_FILA");
-    return { ok: true, queue: await enqueueIfConfigured(found.id) };
+    if (found.status !== "NA_FILA") {
+      await transitionRequest(found.id, "NA_FILA");
+    }
+    const queue = await enqueueIfConfigured(found.id);
+    await appendAuditEvent({
+      requestId: found.id,
+      eventType: "REQUEST_REENQUEUED",
+      payload: { previousStatus: found.status, queue },
+    });
+    return { ok: true, queue };
   });
 }

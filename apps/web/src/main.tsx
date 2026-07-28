@@ -431,7 +431,7 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
   const request = lookup?.request ?? lookup;
   const steps = lookup?.steps ?? [];
   const events = lookup?.events ?? [];
-  const retryableStatuses = ["FALHA_REPROCESSAVEL", "FALHA_MANUAL"];
+  const retryableStatuses = ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"];
 
   return (
     <section className="panel">
@@ -476,7 +476,7 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
             {retryableStatuses.includes(request.status) && (
               <button type="button" className="secondary" onClick={retryCurrentRequest}>
                 <RefreshCw size={18} />
-                Reprocessar
+                {request.status === "NA_FILA" ? "Reenfileirar" : "Reprocessar"}
               </button>
             )}
           </div>

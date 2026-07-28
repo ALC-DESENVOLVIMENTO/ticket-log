@@ -20,7 +20,18 @@ export function getLimitQueue(): Queue<LimitJobData> {
 }
 
 export async function enqueueLimitRequest(requestId: string): Promise<void> {
-  await getLimitQueue().add(
+  const queue = getLimitQueue();
+  const existingJob = await queue.getJob(requestId);
+  if (existingJob) {
+    const state = await existingJob.getState();
+    if (["active", "delayed", "waiting", "waiting-children", "paused"].includes(state)) {
+      return;
+    }
+
+    await existingJob.remove().catch(() => undefined);
+  }
+
+  await queue.add(
     "process-limit-request",
     { requestId },
     {
