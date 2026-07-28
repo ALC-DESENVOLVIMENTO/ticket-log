@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   approveRequestWithToken,
+  getActiveRequestByPlate,
   getApprovalRequestByToken,
   getRequest,
   recordApproval,
@@ -65,11 +66,28 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
       config.groupPolicies[found.vehicle_group as keyof typeof config.groupPolicies] ??
         config.groupPolicies.GERAL_DE_RESTRICOES,
     );
-    const approval = await approveRequestWithToken({
-      token: params.token,
-      userId: user.id,
-      requiresSecondApproval: policy.requiresSecondApproval,
-    });
+    let approval;
+    try {
+      approval = await approveRequestWithToken({
+        token: params.token,
+        userId: user.id,
+        requiresSecondApproval: policy.requiresSecondApproval,
+      });
+    } catch (error) {
+      const databaseError = error as { code?: string; constraint?: string };
+      if (
+        databaseError.code === "23505" &&
+        databaseError.constraint === "uq_active_plate_processing"
+      ) {
+        const activeRequest = await getActiveRequestByPlate(found.vehicle_plate, found.id);
+        return reply.code(409).send({
+          error: "PLATE_ALREADY_HAS_ACTIVE_REQUEST",
+          existingRequestId: activeRequest?.id ?? null,
+          existingStatus: activeRequest?.status ?? null,
+        });
+      }
+      throw error;
+    }
     if (!approval) {
       return reply.code(401).send({ error: "INVALID_OR_EXPIRED_APPROVAL_TOKEN" });
     }

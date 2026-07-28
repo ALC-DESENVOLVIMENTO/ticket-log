@@ -12,6 +12,7 @@ import {
   appendAuditEvent,
   createApprovalToken,
   createRequest,
+  getActiveRequestByPlate,
   getPool,
   getRequest,
   transitionRequest,
@@ -60,6 +61,15 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const policy = evaluateLimitPolicy(requestedAmount, config.groupPolicies[vehicleGroup]);
     if (!policy.allowed) {
       return reply.code(422).send({ error: policy.reason, vehicleGroup });
+    }
+
+    const activeRequest = await getActiveRequestByPlate(vehiclePlate);
+    if (activeRequest) {
+      return reply.code(409).send({
+        error: "PLATE_ALREADY_HAS_ACTIVE_REQUEST",
+        existingRequestId: activeRequest.id,
+        existingStatus: activeRequest.status,
+      });
     }
 
     const idempotencyKey = buildRequestIdempotencyKey({

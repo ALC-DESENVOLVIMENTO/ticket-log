@@ -614,6 +614,23 @@ export async function getRequest(id: string): Promise<DbRequest | null> {
   return result.rows[0] ?? null;
 }
 
+export async function getActiveRequestByPlate(
+  vehiclePlate: string,
+  excludeRequestId?: string,
+): Promise<DbRequest | null> {
+  const result = await getPool().query<DbRequest>(
+    `select *
+       from requests
+      where vehicle_plate = $1
+        and status in ('NA_FILA', 'EM_PROCESSAMENTO', 'LIMITE_ALTERADO')
+        and ($2::uuid is null or id <> $2::uuid)
+      order by created_at
+      limit 1`,
+    [vehiclePlate, excludeRequestId ?? null],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function listRecentRequests(limit = 20): Promise<DbRequest[]> {
   const boundedLimit = Math.max(1, Math.min(limit, 100));
   const result = await getPool().query<DbRequest>(
