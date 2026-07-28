@@ -27,9 +27,11 @@ export interface TicketLogOperationalEvent {
 
 export interface TicketLogProviderHooks {
   onOperationalEvent?(event: TicketLogOperationalEvent): Promise<void> | void;
+  onPreviousLimitRead?(input: { requestId: string; previousLimit: number | null }): Promise<void> | void;
 }
 
 export interface TicketLogProvider {
   changeLimit(input: TicketLogLimitInput): Promise<TicketLogLimitResult>;
+  readCurrentLimit(input: Pick<TicketLogLimitInput, "requestId" | "vehiclePlate">): Promise<number | null>;
   releaseEvaOnly(input: Pick<TicketLogLimitInput, "requestId" | "vehiclePlate">): Promise<void>;
 }

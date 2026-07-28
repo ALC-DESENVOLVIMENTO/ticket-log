@@ -11,6 +11,10 @@ export class SimulationTicketLogProvider implements TicketLogProvider {
     };
   }
 
+  async readCurrentLimit(): Promise<number> {
+    return 1000;
+  }
+
   async releaseEvaOnly(): Promise<void> {
     return;
   }

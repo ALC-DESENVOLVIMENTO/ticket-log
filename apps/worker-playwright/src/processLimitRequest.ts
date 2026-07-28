@@ -8,8 +8,10 @@ import {
   appendAuditEvent,
   getRequest,
   hasCompletedStep,
+  listAutomationSteps,
   transitionRequest,
   updateLimitResult,
+  updatePreviousLimit,
   upsertAutomationStep,
 } from "@ticketlog/db";
 import { acquireLock } from "@ticketlog/queue";
@@ -73,7 +75,53 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
     console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
     const provider = createTicketLogProvider({
       onOperationalEvent: handleTicketLogOperationalEvent,
+      onPreviousLimitRead: ({ requestId: readRequestId, previousLimit }) =>
+        updatePreviousLimit(readRequestId, previousLimit),
     });
+
+    const previousLimit = request.previous_limit === null ? null : Number(request.previous_limit);
+    const previousSteps = await listAutomationSteps(requestId);
+    const ambiguousLimitChange = previousSteps.some(
+      (step) =>
+        step.step_key === "CHANGE_LIMIT" &&
+        step.status === "FAILED" &&
+        step.error_code === "CHANGE_LIMIT_CONFIRMATION_NOT_FOUND",
+    );
+
+    if (ambiguousLimitChange && previousLimit !== null) {
+      const currentLimit = await provider.readCurrentLimit({
+        requestId,
+        vehiclePlate: request.vehicle_plate,
+      });
+      const expectedLimit = Number((previousLimit + Number(request.requested_amount)).toFixed(2));
+      const matchesExpected = currentLimit !== null && Math.abs(currentLimit - expectedLimit) < 0.01;
+      const matchesPrevious = currentLimit !== null && Math.abs(currentLimit - previousLimit) < 0.01;
+
+      if (matchesExpected) {
+        await updateLimitResult({
+          requestId,
+          previousLimit,
+          newLimit: currentLimit,
+          platformResult: "LIMIT_VERIFIED_BY_READBACK_AFTER_AMBIGUOUS_CONFIRMATION",
+        });
+        await upsertAutomationStep({ requestId, stepKey: "CHANGE_LIMIT", status: "DONE" });
+        await appendAuditEvent({
+          requestId,
+          eventType: "AMBIGUOUS_LIMIT_CHANGE_RECOVERED",
+          payload: { previousLimit, currentLimit, expectedLimit },
+        });
+      } else if (!matchesPrevious) {
+        throw new IndeterminateResultError(
+          `LIMIT_READBACK_DIVERGED:previous=${previousLimit}:expected=${expectedLimit}:current=${currentLimit ?? "null"}`,
+        );
+      } else {
+        await appendAuditEvent({
+          requestId,
+          eventType: "AMBIGUOUS_LIMIT_CHANGE_NOT_APPLIED",
+          payload: { previousLimit, currentLimit, expectedLimit },
+        });
+      }
+    }
 
     const limitAlreadyChanged = await hasCompletedStep(requestId, "CHANGE_LIMIT");
     if (limitAlreadyChanged) {

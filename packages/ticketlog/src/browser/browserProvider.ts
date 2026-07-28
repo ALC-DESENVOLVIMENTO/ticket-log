@@ -91,6 +91,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       }
 
       const previousLimit = await fleet.readCurrentLimit();
+      await this.hooks.onPreviousLimitRead?.({
+        requestId: input.requestId,
+        previousLimit,
+      });
       console.info({ requestId: input.requestId, previousLimit }, "ticketlog.changeLimit:previous-limit");
       let platformResult: string;
       let newLimit: number | null = null;
@@ -139,6 +143,42 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
         newLimit,
         platformResult,
       };
+    } finally {
+      await page.close().catch(() => undefined);
+      await session.close();
+    }
+  }
+
+  async readCurrentLimit(
+    input: Pick<TicketLogLimitInput, "requestId" | "vehiclePlate">,
+  ): Promise<number | null> {
+    this.assertEvaExecutionAllowed(input.vehiclePlate);
+
+    const session = await this.createBrowserSession();
+    const context = session.context;
+    const page = await context.newPage();
+    try {
+      await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao Ticket Log" });
+      await this.ensureAuthenticated(page);
+      await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Conferindo limite atual" });
+
+      const fleet = new FleetVehiclePage(page);
+      await fleet.gotoVehicleList();
+      const search = await fleet.searchPlate(input.vehiclePlate);
+      if (search.count === 0) throw new ManualInterventionError("PLATE_NOT_FOUND");
+      if (search.count > 1) throw new ManualInterventionError("MULTIPLE_PLATE_RESULTS");
+      if (normalizePlate(search.foundPlate ?? "") !== normalizePlate(input.vehiclePlate)) {
+        throw new ManualInterventionError("PLATE_MISMATCH");
+      }
+
+      await fleet.openPlate(input.vehiclePlate);
+      const currentLimit = await fleet.readCurrentLimit();
+      console.info(
+        { requestId: input.requestId, plate: input.vehiclePlate, currentLimit },
+        "ticketlog.readCurrentLimit:completed",
+      );
+      await this.saveStorageState(context);
+      return currentLimit;
     } finally {
       await page.close().catch(() => undefined);
       await session.close();

@@ -736,6 +736,16 @@ export async function updateLimitResult(input: {
   );
 }
 
+export async function updatePreviousLimit(requestId: string, previousLimit: number | null): Promise<void> {
+  await getPool().query(
+    `update requests
+        set previous_limit = $2,
+            updated_at = now()
+      where id = $1`,
+    [requestId, previousLimit],
+  );
+}
+
 export async function recordWhatsappMessage(input: {
   providerMessageId?: string;
   phoneE164?: string;
