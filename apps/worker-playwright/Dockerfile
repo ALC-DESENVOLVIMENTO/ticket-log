@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify nginx \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify nginx \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
