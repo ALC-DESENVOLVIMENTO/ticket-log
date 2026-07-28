@@ -65,6 +65,241 @@ function IntegrationBadge() {
   );
 }
 
+type LegalPageKind = "privacy" | "terms";
+
+function LegalPage({ kind }: { kind: LegalPageKind }) {
+  const isPrivacy = kind === "privacy";
+
+  return (
+    <main className="legal-page">
+      <header className="legal-header">
+        <a href="/" aria-label="Voltar para o sistema">
+          <BrandLockup compact />
+        </a>
+        <IntegrationBadge />
+      </header>
+
+      <article className="legal-document">
+        <p className="legal-eyebrow">ALC & Pereira Filho Transportes</p>
+        <h1>{isPrivacy ? "Politica de Privacidade" : "Termos de Servico"}</h1>
+        <p className="legal-updated">Ultima atualizacao: 28 de julho de 2026</p>
+
+        {isPrivacy ? (
+          <>
+            <section>
+              <h2>1. Objetivo e controlador</h2>
+              <p>
+                Esta Politica explica como a ALC & Pereira Filho Transportes trata dados pessoais no sistema
+                interno de solicitacao, aprovacao e acompanhamento de limites temporarios de abastecimento,
+                inclusive quando o atendimento for iniciado pelo WhatsApp.
+              </p>
+              <p>
+                A ALC & Pereira Filho Transportes e a controladora dos dados tratados para essa finalidade. O
+                sistema e destinado exclusivamente a empregados, prestadores e administradores previamente
+                autorizados.
+              </p>
+            </section>
+
+            <section>
+              <h2>2. Dados tratados</h2>
+              <p>Podemos tratar as seguintes categorias de dados:</p>
+              <ul>
+                <li>nome, matricula, funcao e vinculo com a empresa;</li>
+                <li>telefone vinculado ao WhatsApp e e-mail corporativo;</li>
+                <li>credenciais protegidas, registros de MFA e informacoes de autenticacao;</li>
+                <li>placa, grupo do veiculo, valor solicitado e justificativa operacional;</li>
+                <li>aprovacoes, recusas, data, hora, canal de origem e status da solicitacao;</li>
+                <li>logs de seguranca, auditoria, endereco IP e evidencias tecnicas;</li>
+                <li>mensagens relacionadas ao atendimento e a execucao da solicitacao.</li>
+              </ul>
+              <p>O sistema nao solicita senhas da Ticket Log, codigos de MFA ou credenciais corporativas pelo WhatsApp.</p>
+            </section>
+
+            <section>
+              <h2>3. Finalidades e bases legais</h2>
+              <p>Os dados sao utilizados para:</p>
+              <ul>
+                <li>confirmar a identidade e as permissoes do solicitante;</li>
+                <li>criar, aprovar, executar e acompanhar solicitacoes de abastecimento;</li>
+                <li>prevenir fraude, duplicidade, uso indevido e alteracoes nao autorizadas;</li>
+                <li>manter trilha de auditoria e atender obrigacoes legais e internas;</li>
+                <li>investigar falhas, incidentes e divergencias operacionais;</li>
+                <li>enviar atualizacoes sobre o andamento da solicitacao.</li>
+              </ul>
+              <p>
+                O tratamento ocorre conforme as bases legais aplicaveis da LGPD, incluindo execucao de contratos
+                e politicas internas, cumprimento de obrigacao legal ou regulatoria, exercicio regular de direitos
+                e legitimo interesse, com avaliacao de necessidade e proporcionalidade.
+              </p>
+            </section>
+
+            <section>
+              <h2>4. Compartilhamento e operadores</h2>
+              <p>
+                Os dados podem ser compartilhados, no limite necessario, com fornecedores de infraestrutura,
+                autenticacao, mensageria, monitoramento e armazenamento, bem como com a Meta/WhatsApp, Railway,
+                Ticket Log/Edenred e outros prestadores envolvidos na operacao. Esses terceiros tratam dados de
+                acordo com seus contratos, politicas e obrigacoes legais.
+              </p>
+              <p>Nao comercializamos dados pessoais.</p>
+            </section>
+
+            <section>
+              <h2>5. Retencao, seguranca e transferencias</h2>
+              <p>
+                Os dados sao mantidos pelo periodo necessario para cumprir as finalidades descritas, as politicas
+                de auditoria da empresa e as obrigacoes legais. Depois disso, sao eliminados ou anonimizados,
+                salvo quando a conservacao for permitida ou exigida por lei.
+              </p>
+              <p>
+                Aplicamos controle de acesso por funcao, MFA, criptografia, registros de auditoria, segregacao de
+                servicos, protecao de segredos, monitoramento e prevencao de reprocessamentos. Nenhum sistema e
+                totalmente imune a riscos, mas incidentes sao tratados conforme os procedimentos internos e a
+                legislacao aplicavel.
+              </p>
+              <p>
+                Alguns fornecedores podem processar dados fora do Brasil. Nesses casos, sao adotadas medidas
+                compativeis com a LGPD para a transferencia internacional.
+              </p>
+            </section>
+
+            <section>
+              <h2>6. Direitos dos titulares</h2>
+              <p>
+                Nos termos da LGPD, o titular pode solicitar confirmacao do tratamento, acesso, correcao,
+                informacoes sobre compartilhamento, anonimizacao, bloqueio, eliminacao quando cabivel e revisao
+                de decisoes automatizadas.
+              </p>
+              <p>
+                As solicitacoes devem ser encaminhadas ao setor administrativo ou ao responsavel por privacidade
+                pelos canais oficiais da ALC & Pereira Filho Transportes. A identidade do solicitante podera ser
+                confirmada antes do atendimento.
+              </p>
+            </section>
+
+            <section>
+              <h2>7. Cookies, menores e atualizacoes</h2>
+              <p>
+                O sistema utiliza armazenamento local e tecnologias estritamente necessarias para autenticacao,
+                seguranca e continuidade da sessao. Ele nao e destinado a criancas ou adolescentes.
+              </p>
+              <p>
+                Esta Politica pode ser atualizada para refletir mudancas legais, tecnicas ou operacionais. A data
+                da versao vigente sera sempre informada nesta pagina.
+              </p>
+            </section>
+          </>
+        ) : (
+          <>
+            <section>
+              <h2>1. Aceitacao e finalidade</h2>
+              <p>
+                Estes Termos regulam o uso do sistema interno da ALC & Pereira Filho Transportes para solicitar,
+                aprovar e acompanhar alteracoes temporarias de limite de abastecimento. Ao utilizar o sistema ou
+                iniciar uma solicitacao pelo WhatsApp, o usuario declara que leu e aceita estes Termos.
+              </p>
+            </section>
+
+            <section>
+              <h2>2. Elegibilidade e acesso</h2>
+              <p>
+                O acesso e restrito a usuarios previamente cadastrados e autorizados. O usuario deve utilizar sua
+                propria conta, manter senha e fatores de autenticacao sob sigilo e comunicar imediatamente
+                suspeitas de comprometimento.
+              </p>
+              <p>
+                O numero de WhatsApp, isoladamente, nao comprova identidade. A aprovacao pode exigir login forte,
+                MFA e, conforme a politica aplicavel, uma segunda aprovacao independente.
+              </p>
+            </section>
+
+            <section>
+              <h2>3. Uso permitido</h2>
+              <p>O usuario se compromete a:</p>
+              <ul>
+                <li>informar placa, valor e justificativa corretos;</li>
+                <li>solicitar valores apenas para necessidade operacional legitima;</li>
+                <li>revisar os dados antes de aprovar;</li>
+                <li>nao compartilhar links de aprovacao, contas ou codigos de autenticacao;</li>
+                <li>nao tentar contornar limites, controles de seguranca ou trilhas de auditoria;</li>
+                <li>comunicar erros ou alteracoes indevidas assim que identificados.</li>
+              </ul>
+            </section>
+
+            <section>
+              <h2>4. Processamento das solicitacoes</h2>
+              <p>
+                Uma solicitacao somente e considerada concluida quando a alteracao do limite e a liberacao de
+                abastecimento pela EVA forem confirmadas. O sistema pode bloquear duplicidades, limitar valores,
+                impedir operacoes simultaneas para a mesma placa ou encaminhar o caso para analise humana.
+              </p>
+              <p>
+                Em caso de resposta ambigua da plataforma, o sistema pode interromper o fluxo e verificar o estado
+                antes de qualquer nova tentativa. A alteracao de limite nao sera repetida quando nao houver
+                evidencia suficiente de que a tentativa anterior falhou.
+              </p>
+            </section>
+
+            <section>
+              <h2>5. Ticket Log, EVA e terceiros</h2>
+              <p>
+                Ticket Log, Sou Log+, EVA, Edenred, Meta e WhatsApp sao servicos de terceiros e possuem termos e
+                politicas proprios. Este sistema e uma ferramenta interna da ALC & Pereira Filho Transportes e nao
+                representa um produto oficial desses terceiros.
+              </p>
+              <p>
+                Mudancas de interface, indisponibilidade, CAPTCHA, MFA, bloqueios ou outras medidas de seguranca
+                podem exigir intervencao humana. O sistema nao tenta contornar mecanismos antifraude ou de
+                autenticacao.
+              </p>
+            </section>
+
+            <section>
+              <h2>6. Disponibilidade e responsabilidades</h2>
+              <p>
+                Empregamos monitoramento e controles de recuperacao, mas nao garantimos disponibilidade
+                ininterrupta de servicos de terceiros. Em situacoes de falha, o usuario deve observar o processo
+                manual de contingencia definido pela empresa.
+              </p>
+              <p>
+                O usuario e responsavel pela veracidade da solicitacao e pelo uso de suas credenciais. A empresa
+                pode suspender acessos, cancelar solicitacoes e apurar responsabilidades em caso de uso indevido.
+              </p>
+            </section>
+
+            <section>
+              <h2>7. Privacidade, auditoria e alteracoes</h2>
+              <p>
+                O tratamento de dados segue a Politica de Privacidade. Solicitacoes, aprovacoes, tentativas e
+                resultados podem ser registrados para seguranca, auditoria e cumprimento de obrigacoes.
+              </p>
+              <p>
+                Estes Termos podem ser atualizados por mudancas legais, tecnicas ou operacionais. A continuidade
+                de uso apos a publicacao da nova versao representa aceitacao dos termos atualizados.
+              </p>
+            </section>
+
+            <section>
+              <h2>8. Legislacao e contato</h2>
+              <p>
+                Estes Termos sao regidos pelas leis brasileiras. Duvidas devem ser encaminhadas ao setor
+                administrativo ou ao responsavel pelo sistema pelos canais oficiais da ALC & Pereira Filho
+                Transportes.
+              </p>
+            </section>
+          </>
+        )}
+
+        <footer className="legal-footer">
+          <a href="/">Acessar o sistema</a>
+          <a href="/politica-de-privacidade">Politica de Privacidade</a>
+          <a href="/termos-de-servico">Termos de Servico</a>
+        </footer>
+      </article>
+    </main>
+  );
+}
+
 function money(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
@@ -147,6 +382,10 @@ function LoginView({ onLoggedIn }: { onLoggedIn: (requiresMfaSetup: boolean) => 
           Entrar
         </button>
         <ErrorBox error={error} />
+        <nav className="auth-legal-links" aria-label="Documentos legais">
+          <a href="/politica-de-privacidade">Politica de Privacidade</a>
+          <a href="/termos-de-servico">Termos de Servico</a>
+        </nav>
       </form>
     </main>
   );
@@ -896,6 +1135,12 @@ function App() {
   const [requiresMfaSetup, setRequiresMfaSetup] = useState(false);
   const [authNeeded, setAuthNeeded] = useState(false);
   const token = window.location.pathname.match(/^\/approval\/([^/]+)/)?.[1];
+  const legalPage =
+    window.location.pathname === "/politica-de-privacidade"
+      ? "privacy"
+      : window.location.pathname === "/termos-de-servico"
+        ? "terms"
+        : null;
 
   useEffect(() => {
     getPublicConfig().then(setPublicConfig).catch(() => undefined);
@@ -903,6 +1148,10 @@ function App() {
       getMe().then((result) => setUser(result.user)).catch(() => setSessionToken(null));
     }
   }, []);
+
+  if (legalPage) {
+    return <LegalPage kind={legalPage} />;
+  }
 
   async function afterLogin(needsMfa: boolean) {
     const result = await getMe();

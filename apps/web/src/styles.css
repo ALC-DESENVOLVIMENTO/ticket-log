@@ -618,6 +618,102 @@ pre {
   margin-bottom: 18px;
 }
 
+.auth-legal-links {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 6px;
+  padding-top: 14px;
+}
+
+.auth-legal-links a,
+.legal-footer a {
+  color: var(--ticket-blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.legal-page {
+  min-height: 100vh;
+}
+
+.legal-header {
+  align-items: center;
+  background: #111;
+  border-bottom: 3px solid var(--alc-red);
+  display: flex;
+  justify-content: space-between;
+  padding: 16px max(24px, calc((100vw - 1080px) / 2));
+}
+
+.legal-header > a {
+  text-decoration: none;
+}
+
+.legal-header .brand-lockup {
+  margin: 0;
+}
+
+.legal-header .integration-badge {
+  margin: 0;
+  max-width: 230px;
+}
+
+.legal-document {
+  background: white;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--alc-red);
+  margin: 36px auto 64px;
+  max-width: 920px;
+  padding: 42px 54px;
+}
+
+.legal-document h1 {
+  font-size: 34px;
+  margin: 6px 0 8px;
+}
+
+.legal-document h2 {
+  font-size: 19px;
+  margin: 30px 0 10px;
+}
+
+.legal-document p,
+.legal-document li {
+  color: #34383d;
+  line-height: 1.65;
+}
+
+.legal-document ul {
+  padding-left: 22px;
+}
+
+.legal-eyebrow {
+  color: var(--alc-red-dark) !important;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.legal-updated {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted) !important;
+  font-size: 14px;
+  margin: 0 0 28px;
+  padding-bottom: 24px;
+}
+
+.legal-footer {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-top: 36px;
+  padding-top: 24px;
+}
+
 @media (max-width: 820px) {
   .shell {
     grid-template-columns: 1fr;
@@ -653,5 +749,27 @@ pre {
   .detail-headline {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .legal-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .legal-header .integration-badge {
+    max-width: none;
+  }
+
+  .legal-document {
+    border-left: 0;
+    border-right: 0;
+    margin: 20px 0 40px;
+    padding: 28px 20px;
+  }
+
+  .legal-document h1 {
+    font-size: 28px;
   }
 }
