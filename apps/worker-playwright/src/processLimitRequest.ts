@@ -158,9 +158,10 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       "processLimitRequest:error",
     );
     const shouldRetry = await classifyFailure(requestId, error, currentStep);
+    const authenticationRequired = isAuthenticationIntervention(error);
     await updateOperationalRuntime({
       workerStatus: error instanceof ManualInterventionError ? "WAITING_OPERATOR" : "IDLE",
-      sessionStatus: error instanceof ManualInterventionError ? "AUTH_REQUIRED" : "ERROR",
+      sessionStatus: authenticationRequired ? "AUTH_REQUIRED" : "ERROR",
       currentRequestId: requestId,
       currentStep,
       challengeType: error instanceof ManualInterventionError ? error.code : null,
@@ -170,6 +171,18 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
   } finally {
     await lock.release();
   }
+}
+
+function isAuthenticationIntervention(error: unknown): boolean {
+  if (!(error instanceof ManualInterventionError)) return false;
+
+  return [
+    "BROWSER_CLOSED_DURING_MANUAL_LOGIN",
+    "MANUAL_LOGIN_NOT_CONFIRMED",
+    "TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN",
+    "TICKETLOG_SESSION_NOT_AUTHENTICATED",
+    "UNEXPECTED_CAPTCHA_OR_MFA",
+  ].includes(error.code);
 }
 
 async function classifyFailure(requestId: string, error: unknown, stepKey: AutomationStepKey): Promise<boolean> {

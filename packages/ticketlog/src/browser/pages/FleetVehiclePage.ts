@@ -7,9 +7,11 @@ export class FleetVehiclePage {
   async gotoVehicleList(): Promise<void> {
     const url = process.env.TICKETLOG_VEHICLE_LIST_URL;
     if (!url) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
-    await this.page.goto(url);
+    await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    if (!(await this.waitForVehicleListReady(5_000))) {
+    if (!(await this.waitForVehicleListReady(30_000))) {
+      const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
+      await this.page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await this.clickVehicleListEntrypoint();
     }
 
@@ -238,13 +240,24 @@ export class FleetVehiclePage {
     return null;
   }
 
-  private async findVisible(candidates: Locator[], errorCode = "VISIBLE_LOCATOR_NOT_FOUND"): Promise<Locator> {
-    for (const candidate of candidates) {
-      const locator = candidate.first();
-      if (await locator.isVisible().catch(() => false)) {
-        return locator;
+  private async findVisible(
+    candidates: Locator[],
+    errorCode = "VISIBLE_LOCATOR_NOT_FOUND",
+    timeoutMs = 0,
+  ): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      for (const candidate of candidates) {
+        const locator = candidate.first();
+        if (await locator.isVisible().catch(() => false)) {
+          return locator;
+        }
       }
-    }
+
+      if (Date.now() < deadline) {
+        await this.page.waitForTimeout(500);
+      }
+    } while (Date.now() < deadline);
 
     throw new ManualInterventionError(errorCode);
   }
@@ -300,11 +313,16 @@ export class FleetVehiclePage {
   }
 
   private async clickVehicleListEntrypoint(): Promise<void> {
-    const entrypoint = await this.findVisible([
-      this.page.getByText(/^\s*ve.culo\s*$/i).first(),
-      this.page.getByText(/^\s*equipamento\s*$/i).first(),
-      this.page.getByRole("link", { name: /ve.culo|equipamento/i }).first(),
-    ]);
+    const entrypoint = await this.findVisible(
+      [
+        this.page.getByText(/^\s*ve.culo\s*$/i).first(),
+        this.page.getByText(/^\s*equipamento\s*$/i).first(),
+        this.page.getByRole("link", { name: /ve.culo|equipamento/i }).first(),
+        this.page.getByRole("button", { name: /ve.culo|equipamento/i }).first(),
+      ],
+      "VEHICLE_LIST_ENTRYPOINT_NOT_FOUND",
+      30_000,
+    );
 
     await entrypoint.scrollIntoViewIfNeeded().catch(() => undefined);
     await entrypoint.click().catch(async () => {
