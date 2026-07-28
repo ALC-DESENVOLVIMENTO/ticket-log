@@ -18,7 +18,6 @@ function operatorStationUrl(baseUrl: string | null): string | null {
   url.searchParams.set("autoconnect", "true");
   url.searchParams.set("resize", "scale");
   url.searchParams.set("access", token);
-  url.searchParams.set("path", `websockify?access=${token}`);
   return url.toString();
 }
 

@@ -40,11 +40,19 @@ cat >/tmp/ticketlog-station-nginx.conf <<EOF
 events {}
 http {
   access_log off;
+  map "\$arg_access:\$cookie_station_access" \$station_authorized {
+    default 0;
+    "${TICKETLOG_OPERATOR_ACCESS_TOKEN}:" 1;
+    ":${TICKETLOG_OPERATOR_ACCESS_TOKEN}" 1;
+    "${TICKETLOG_OPERATOR_ACCESS_TOKEN}:${TICKETLOG_OPERATOR_ACCESS_TOKEN}" 1;
+  }
+
   server {
     listen ${PORT:-8080};
 
     location / {
-      if (\$arg_access != "${TICKETLOG_OPERATOR_ACCESS_TOKEN}") { return 403; }
+      if (\$station_authorized = 0) { return 403; }
+      add_header Set-Cookie "station_access=${TICKETLOG_OPERATOR_ACCESS_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict" always;
       proxy_pass http://127.0.0.1:6080;
       proxy_http_version 1.1;
       proxy_set_header Upgrade \$http_upgrade;
