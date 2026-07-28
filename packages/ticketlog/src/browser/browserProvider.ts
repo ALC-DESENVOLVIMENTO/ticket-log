@@ -108,7 +108,8 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       } catch (error) {
         if (!(error instanceof IndeterminateResultError)) throw error;
 
-        newLimit = await fleet.readCurrentLimit();
+        await page.waitForTimeout(2_000);
+        newLimit = await this.readLimitAfterSubmission(fleet, input.vehiclePlate);
         const expectedLimit =
           previousLimit !== null ? Number((previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
         const deltaMatches =
@@ -274,6 +275,19 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     await page.goto(homeUrl);
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+  }
+
+  private async readLimitAfterSubmission(fleet: FleetVehiclePage, vehiclePlate: string): Promise<number | null> {
+    await fleet.gotoVehicleList();
+    const search = await fleet.searchPlate(vehiclePlate);
+    if (search.count === 0) throw new ManualInterventionError("PLATE_NOT_FOUND_AFTER_LIMIT_SUBMISSION");
+    if (search.count > 1) throw new ManualInterventionError("MULTIPLE_PLATE_RESULTS_AFTER_LIMIT_SUBMISSION");
+    if (normalizePlate(search.foundPlate ?? "") !== normalizePlate(vehiclePlate)) {
+      throw new ManualInterventionError("PLATE_MISMATCH_AFTER_LIMIT_SUBMISSION");
+    }
+
+    await fleet.openPlate(vehiclePlate);
+    return fleet.readCurrentLimit();
   }
 
   private async ensureAuthenticated(page: Page): Promise<void> {
