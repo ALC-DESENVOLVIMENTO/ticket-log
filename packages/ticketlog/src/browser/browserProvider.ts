@@ -328,7 +328,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
   private async requiresHumanChallenge(page: Page): Promise<boolean> {
     const url = page.url();
-    if (/edenred\.io\/web\/session\/step\/otp/i.test(url)) return true;
+    if (/edenred\.io\/web\/session\/step\//i.test(url)) return true;
 
     const bodyText = await page.locator("body").innerText().catch(() => "");
     return /c.digo de verifica..o|receber c.digo por e-mail|solicitar novo c.digo|captcha|autenticador|mfa/i.test(

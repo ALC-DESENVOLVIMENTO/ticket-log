@@ -279,7 +279,7 @@ export class FleetVehiclePage {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const currentUrl = this.page.url();
-      if (/edenred\.io\/web\/session\/step\/otp/i.test(currentUrl)) {
+      if (/edenred\.io\/web\/session\/step\//i.test(currentUrl)) {
         throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
       }
 
