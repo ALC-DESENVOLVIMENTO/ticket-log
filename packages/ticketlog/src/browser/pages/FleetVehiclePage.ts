@@ -20,13 +20,16 @@ export class FleetVehiclePage {
 
   async searchPlate(plate: string): Promise<{ count: number; foundPlate?: string }> {
     const normalized = normalizePlate(plate);
-    const plateSearch = await this.findVisible([
-      this.page.getByLabel(/placa|identificador/i),
-      this.page.getByPlaceholder(/placa|identificador|pesquise|busque|buscar na tabela/i),
-      this.page.locator("input:visible").first(),
-      this.page.getByRole("textbox").filter({ hasText: /placa|identificador/i }),
-      this.page.getByRole("textbox").first(),
-    ]);
+    const plateSearch = await this.findVisible(
+      [
+        this.page.getByLabel(/placa|identificador/i),
+        this.page.getByPlaceholder(/placa|identificador|pesquise|busque|buscar na tabela/i),
+        this.page.locator("input:visible").first(),
+        this.page.getByRole("textbox").filter({ hasText: /placa|identificador/i }),
+        this.page.getByRole("textbox").first(),
+      ],
+      "PLATE_SEARCH_INPUT_NOT_FOUND",
+    );
 
     await plateSearch.fill(normalized);
     const searchButton = this.page.getByRole("button", { name: /pesquisar|buscar|filtrar/i }).first();
@@ -45,10 +48,13 @@ export class FleetVehiclePage {
 
   async openPlate(plate: string): Promise<void> {
     const normalized = normalizePlate(plate);
-    const plateLink = await this.findVisible([
-      this.page.getByRole("link", { name: new RegExp(normalized, "i") }),
-      this.page.getByText(normalized, { exact: false }).first(),
-    ]);
+    const plateLink = await this.findVisible(
+      [
+        this.page.getByRole("link", { name: new RegExp(normalized, "i") }),
+        this.page.getByText(normalized, { exact: false }).first(),
+      ],
+      "PLATE_LINK_NOT_FOUND",
+    );
     await plateLink.click();
     await expect(this.page.getByText(normalized).first()).toBeVisible();
     await expect(this.page.getByText(/detalhes do ve.culo/i).first()).toBeVisible({ timeout: 30_000 });
@@ -114,10 +120,13 @@ export class FleetVehiclePage {
 
   private async clickChangeLimitEntrypoint(): Promise<void> {
     const attempts: string[] = [];
-    const direct = await this.findVisible([
-      this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
-      this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
-    ]).catch(() => null);
+    const direct = await this.findVisible(
+      [
+        this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
+        this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
+      ],
+      "CHANGE_LIMIT_DIRECT_ENTRYPOINT_NOT_FOUND",
+    ).catch(() => null);
 
     if (direct) {
       attempts.push("direct-role");
@@ -217,7 +226,7 @@ export class FleetVehiclePage {
     return null;
   }
 
-  private async findVisible(candidates: Locator[]): Promise<Locator> {
+  private async findVisible(candidates: Locator[], errorCode = "VISIBLE_LOCATOR_NOT_FOUND"): Promise<Locator> {
     for (const candidate of candidates) {
       const locator = candidate.first();
       if (await locator.isVisible().catch(() => false)) {
@@ -225,7 +234,7 @@ export class FleetVehiclePage {
       }
     }
 
-    throw new ManualInterventionError("VISIBLE_LOCATOR_NOT_FOUND");
+    throw new ManualInterventionError(errorCode);
   }
 
   private async waitForPlateSearchResult(plate: string): Promise<void> {

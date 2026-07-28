@@ -21,12 +21,16 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const page = await context.newPage();
 
     try {
+      console.info({ requestId: input.requestId, plate: input.vehiclePlate }, "ticketlog.changeLimit:start");
       await this.ensureAuthenticated(page);
+      console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:authenticated");
 
       const fleet = new FleetVehiclePage(page);
       await fleet.gotoVehicleList();
+      console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:vehicle-list-open");
 
       const search = await fleet.searchPlate(input.vehiclePlate);
+      console.info({ requestId: input.requestId, search }, "ticketlog.changeLimit:plate-search-result");
       if (search.count === 0) throw new ManualInterventionError("PLATE_NOT_FOUND");
       if (search.count > 1) throw new ManualInterventionError("MULTIPLE_PLATE_RESULTS");
       if (normalizePlate(search.foundPlate ?? "") !== normalizePlate(input.vehiclePlate)) {
@@ -34,20 +38,27 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       }
 
       await fleet.openPlate(input.vehiclePlate);
+      console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:plate-opened");
 
       if (await fleet.isBlocked()) {
+        console.info({ requestId: input.requestId }, "ticketlog.changeLimit:vehicle-blocked");
         await fleet.unblockVehicle();
+        console.info({ requestId: input.requestId }, "ticketlog.changeLimit:vehicle-unblocked");
       }
 
       const previousLimit = await fleet.readCurrentLimit();
+      console.info({ requestId: input.requestId, previousLimit }, "ticketlog.changeLimit:previous-limit");
       const platformResult = await fleet.addTemporaryLimit({
         plate: input.vehiclePlate,
         amount: input.requestedAmount,
         reason: ".",
       });
+      console.info({ requestId: input.requestId, platformResult }, "ticketlog.changeLimit:limit-changed");
       const newLimit = await fleet.readCurrentLimit();
+      console.info({ requestId: input.requestId, newLimit }, "ticketlog.changeLimit:new-limit");
 
       await this.saveStorageState(context);
+      console.info({ requestId: input.requestId }, "ticketlog.changeLimit:done");
 
       return {
         previousLimit,
@@ -67,11 +78,15 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const context = session.context;
     const page = await context.newPage();
     try {
+      console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:start");
       await this.ensureAuthenticated(page);
       await this.openEvaHostPage(page);
+      console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
       const eva = new EvaPage(page);
       await eva.open();
+      console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:panel-open");
       await eva.releaseFuelRestriction(input.vehiclePlate);
+      console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:released");
       await this.saveStorageState(context);
     } finally {
       await session.close();

@@ -18,6 +18,7 @@ import { createTicketLogProvider } from "@ticketlog/ticketlog";
 type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
 
 export async function processLimitRequest(requestId: string): Promise<void> {
+  console.info({ requestId }, "processLimitRequest:start");
   const request = await getRequest(requestId);
   if (!request) throw new Error("REQUEST_NOT_FOUND");
 
@@ -42,11 +43,13 @@ export async function processLimitRequest(requestId: string): Promise<void> {
       await transitionRequest(requestId, "NA_FILA");
     }
     await transitionRequest(requestId, "EM_PROCESSAMENTO");
+    console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
     const provider = createTicketLogProvider();
 
     const limitAlreadyChanged = await hasCompletedStep(requestId, "CHANGE_LIMIT");
     if (limitAlreadyChanged) {
       currentStep = "EVA_RELEASE";
+      console.info({ requestId }, "processLimitRequest:change-limit-already-done");
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
       await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
@@ -56,6 +59,7 @@ export async function processLimitRequest(requestId: string): Promise<void> {
     }
 
     await upsertAutomationStep({ requestId, stepKey: "CHANGE_LIMIT", status: "RUNNING" });
+    console.info({ requestId, plate: request.vehicle_plate, amount: Number(request.requested_amount) }, "processLimitRequest:change-limit-running");
     const result = await provider.changeLimit({
       requestId,
       vehiclePlate: request.vehicle_plate,
@@ -71,13 +75,16 @@ export async function processLimitRequest(requestId: string): Promise<void> {
 
     await upsertAutomationStep({ requestId, stepKey: "CHANGE_LIMIT", status: "DONE" });
     await transitionRequest(requestId, "LIMITE_ALTERADO");
+    console.info({ requestId }, "processLimitRequest:change-limit-done");
 
     currentStep = "EVA_RELEASE";
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
+    console.info({ requestId }, "processLimitRequest:eva-running");
     await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
     await transitionRequest(requestId, "EVA_LIBERADA");
     await transitionRequest(requestId, "CONCLUIDA");
+    console.info({ requestId }, "processLimitRequest:completed");
 
     await appendAuditEvent({
       requestId,
@@ -89,6 +96,17 @@ export async function processLimitRequest(requestId: string): Promise<void> {
       },
     });
   } catch (error) {
+    console.error(
+      {
+        requestId,
+        stepKey: currentStep,
+        errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorCode: typeof error === "object" && error && "code" in error ? (error as any).code : undefined,
+        errorStack: error instanceof Error ? error.stack : undefined,
+      },
+      "processLimitRequest:error",
+    );
     const shouldRetry = await classifyFailure(requestId, error, currentStep);
     if (shouldRetry) throw error;
   } finally {
