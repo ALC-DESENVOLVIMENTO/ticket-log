@@ -1,14 +1,35 @@
 import type { FastifyInstance } from "fastify";
-import { consumeApprovalToken, getApprovalRequestByToken, getRequest, recordApproval, transitionRequest } from "@ticketlog/db";
+import {
+  approveRequestWithToken,
+  getApprovalRequestByToken,
+  getRequest,
+  recordApproval,
+  transitionRequest,
+} from "@ticketlog/db";
 import { enqueueLimitRequest } from "@ticketlog/queue";
 import { evaluateLimitPolicy } from "@ticketlog/domain";
 import { getAuthenticatedUser } from "../auth.js";
 import { config } from "../config.js";
 
-async function enqueueIfConfigured(requestId: string): Promise<{ queued: boolean; reason?: string }> {
+async function enqueueIfConfigured(
+  app: FastifyInstance,
+  requestId: string,
+): Promise<{ queued: boolean; reason?: string }> {
   if (!process.env.REDIS_URL) return { queued: false, reason: "REDIS_URL_NOT_CONFIGURED" };
-  await enqueueLimitRequest(requestId);
-  return { queued: true };
+  try {
+    await enqueueLimitRequest(requestId);
+    return { queued: true };
+  } catch (error) {
+    app.log.error(
+      {
+        requestId,
+        errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      "approval recorded but queue enqueue failed",
+    );
+    return { queued: false, reason: "QUEUE_ENQUEUE_FAILED" };
+  }
 }
 
 export async function approvalRoutes(app: FastifyInstance): Promise<void> {
@@ -36,45 +57,39 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
   app.post("/approval/:token/approve", async (request, reply) => {
     const user = await getAuthenticatedUser(request);
     const params = request.params as { token: string };
-    const requestId = await consumeApprovalToken(params.token, user.id);
-
-    if (!requestId) {
-      return reply.code(401).send({ error: "INVALID_OR_EXPIRED_APPROVAL_TOKEN" });
-    }
-
-    const found = await getRequest(requestId);
-    if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
-
-    if (found.status === "AGUARDANDO_AUTENTICACAO") {
-      await transitionRequest(found.id, "AGUARDANDO_APROVACAO", user.id);
-    }
-
-    await recordApproval({
-      requestId: found.id,
-      approverId: user.id,
-      level: 1,
-      decision: "approved",
-    });
+    const found = await getApprovalRequestByToken(params.token);
+    if (!found) return reply.code(401).send({ error: "INVALID_OR_EXPIRED_APPROVAL_TOKEN" });
 
     const policy = evaluateLimitPolicy(
       Number(found.requested_amount),
       config.groupPolicies[found.vehicle_group as keyof typeof config.groupPolicies] ??
         config.groupPolicies.GERAL_DE_RESTRICOES,
     );
-    if (policy.requiresSecondApproval) {
-      await transitionRequest(found.id, "AGUARDANDO_SEGUNDA_APROVACAO", user.id);
-      return { status: "AGUARDANDO_SEGUNDA_APROVACAO" };
+    const approval = await approveRequestWithToken({
+      token: params.token,
+      userId: user.id,
+      requiresSecondApproval: policy.requiresSecondApproval,
+    });
+    if (!approval) {
+      return reply.code(401).send({ error: "INVALID_OR_EXPIRED_APPROVAL_TOKEN" });
     }
 
-    await recordApproval({
-      requestId: found.id,
-      approverId: user.id,
-      level: 2,
-      decision: "approved",
-    });
-    await transitionRequest(found.id, "NA_FILA", user.id);
-    const queue = await enqueueIfConfigured(found.id);
-    return { status: "NA_FILA", queue };
+    if (approval.request.status === "AGUARDANDO_SEGUNDA_APROVACAO") {
+      return {
+        status: approval.request.status,
+        recovered: approval.recovered,
+      };
+    }
+
+    const queue =
+      approval.request.status === "NA_FILA"
+        ? await enqueueIfConfigured(app, approval.request.id)
+        : { queued: false, reason: "REQUEST_ALREADY_ADVANCED" };
+    return {
+      status: approval.request.status,
+      queue,
+      recovered: approval.recovered,
+    };
   });
 
   app.post("/requests/:id/second-approval", async (request, reply) => {
@@ -96,7 +111,7 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
       decision: "approved",
     });
     await transitionRequest(found.id, "NA_FILA", user.id);
-    const queue = await enqueueIfConfigured(found.id);
+    const queue = await enqueueIfConfigured(app, found.id);
     return { status: "NA_FILA", queue };
   });
 }

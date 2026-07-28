@@ -426,6 +426,139 @@ export async function consumeApprovalToken(token: string, userId: string) {
   return result.rows[0]?.request_id ?? null;
 }
 
+export async function approveRequestWithToken(input: {
+  token: string;
+  userId: string;
+  requiresSecondApproval: boolean;
+}): Promise<{ request: DbRequest; recovered: boolean } | null> {
+  const tokenHash = createHash("sha256").update(input.token).digest("hex");
+  const client = await getPool().connect();
+
+  try {
+    await client.query("begin");
+    const consumed = await client.query<{ request_id: string }>(
+      `update approval_tokens
+          set used_at = now()
+        where token_hash = $1
+          and expected_user_id = $2
+          and used_at is null
+          and expires_at > now()
+        returning request_id`,
+      [tokenHash, input.userId],
+    );
+
+    let requestId = consumed.rows[0]?.request_id;
+    let recovered = false;
+
+    if (!requestId) {
+      const existing = await client.query<{ request_id: string }>(
+        `select request_id
+           from approval_tokens
+          where token_hash = $1
+            and expected_user_id = $2
+            and used_at is not null
+            and expires_at > now()
+          for update`,
+        [tokenHash, input.userId],
+      );
+      requestId = existing.rows[0]?.request_id;
+      recovered = Boolean(requestId);
+    }
+
+    if (!requestId) {
+      await client.query("rollback");
+      return null;
+    }
+
+    const current = await client.query<DbRequest>(
+      "select * from requests where id = $1 for update",
+      [requestId],
+    );
+    let request = current.rows[0];
+    if (!request) throw new Error("REQUEST_NOT_FOUND");
+
+    const existingApproval = await client.query(
+      `select 1
+         from approvals
+        where request_id = $1
+          and approver_id = $2
+          and level = 1
+          and decision = 'approved'`,
+      [requestId, input.userId],
+    );
+
+    const hasExistingApproval = (existingApproval.rowCount ?? 0) > 0;
+
+    if (request.status === "AGUARDANDO_AUTENTICACAO") {
+      assertTransition(request.status, "AGUARDANDO_APROVACAO");
+      const updated = await client.query<DbRequest>(
+        "update requests set status = $1, updated_at = now() where id = $2 returning *",
+        ["AGUARDANDO_APROVACAO", requestId],
+      );
+      await appendAuditEvent({
+        client,
+        requestId,
+        actorUserId: input.userId,
+        eventType: "REQUEST_STATE_CHANGED",
+        payload: { from: request.status, to: "AGUARDANDO_APROVACAO" },
+      });
+      request = updated.rows[0];
+    }
+
+    if (
+      hasExistingApproval &&
+      request.status !== "AGUARDANDO_APROVACAO"
+    ) {
+      await client.query("commit");
+      return { request, recovered: true };
+    }
+
+    if (request.status !== "AGUARDANDO_APROVACAO") {
+      throw new Error(`REQUEST_NOT_WAITING_FIRST_APPROVAL:${request.status}`);
+    }
+
+    if (!hasExistingApproval) {
+      await client.query(
+        `insert into approvals(request_id, approver_id, level, decision)
+         values ($1, $2, 1, 'approved')
+         on conflict do nothing`,
+        [requestId, input.userId],
+      );
+      await appendAuditEvent({
+        client,
+        requestId,
+        actorUserId: input.userId,
+        eventType: "REQUEST_APPROVAL_RECORDED",
+        payload: { level: 1, decision: "approved", recovered },
+      });
+    }
+
+    const target: RequestState = input.requiresSecondApproval
+      ? "AGUARDANDO_SEGUNDA_APROVACAO"
+      : "NA_FILA";
+    assertTransition(request.status, target);
+    const updated = await client.query<DbRequest>(
+      "update requests set status = $1, updated_at = now() where id = $2 returning *",
+      [target, requestId],
+    );
+    await appendAuditEvent({
+      client,
+      requestId,
+      actorUserId: input.userId,
+      eventType: "REQUEST_STATE_CHANGED",
+      payload: { from: request.status, to: target },
+    });
+
+    await client.query("commit");
+    return { request: updated.rows[0], recovered };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getApprovalRequestByToken(token: string): Promise<(DbRequest & {
   requester_name: string;
   requester_email: string;
