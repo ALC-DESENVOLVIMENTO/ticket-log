@@ -14,6 +14,10 @@ import {
 } from "@ticketlog/db";
 import { acquireLock } from "@ticketlog/queue";
 import { createTicketLogProvider } from "@ticketlog/ticketlog";
+import {
+  handleTicketLogOperationalEvent,
+  updateOperationalRuntime,
+} from "./operationalRuntime.js";
 
 type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
 
@@ -47,6 +51,13 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
   let currentStep: AutomationStepKey = "CHANGE_LIMIT";
 
   try {
+    await updateOperationalRuntime({
+      workerStatus: "BUSY",
+      currentRequestId: requestId,
+      currentStep: currentStep,
+      challengeType: null,
+      statusMessage: "Iniciando solicitacao",
+    });
     if (request.status === "FALHA_REPROCESSAVEL") {
       await transitionRequest(requestId, "NA_FILA");
     }
@@ -60,11 +71,14 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
     }
     await transitionRequest(requestId, "EM_PROCESSAMENTO");
     console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
-    const provider = createTicketLogProvider();
+    const provider = createTicketLogProvider({
+      onOperationalEvent: handleTicketLogOperationalEvent,
+    });
 
     const limitAlreadyChanged = await hasCompletedStep(requestId, "CHANGE_LIMIT");
     if (limitAlreadyChanged) {
       currentStep = "EVA_RELEASE";
+      await updateOperationalRuntime({ currentStep, statusMessage: "Retomando pela EVA" });
       console.info({ requestId }, "processLimitRequest:change-limit-already-done");
       await transitionRequest(requestId, "LIMITE_ALTERADO");
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
@@ -72,6 +86,15 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
       await transitionRequest(requestId, "EVA_LIBERADA");
       await transitionRequest(requestId, "CONCLUIDA");
+      await updateOperationalRuntime({
+        workerStatus: "IDLE",
+        sessionStatus: "SESSION_READY",
+        currentRequestId: null,
+        currentStep: null,
+        currentUrl: null,
+        challengeType: null,
+        statusMessage: "Solicitacao concluida",
+      });
       return;
     }
 
@@ -95,6 +118,7 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
     console.info({ requestId }, "processLimitRequest:change-limit-done");
 
     currentStep = "EVA_RELEASE";
+    await updateOperationalRuntime({ currentStep, statusMessage: "Limite alterado; iniciando EVA" });
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
     console.info({ requestId }, "processLimitRequest:eva-running");
     await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
@@ -112,6 +136,15 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
         newLimit: result.newLimit,
       },
     });
+    await updateOperationalRuntime({
+      workerStatus: "IDLE",
+      sessionStatus: "SESSION_READY",
+      currentRequestId: null,
+      currentStep: null,
+      currentUrl: null,
+      challengeType: null,
+      statusMessage: "Solicitacao concluida",
+    });
   } catch (error) {
     console.error(
       {
@@ -125,6 +158,14 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       "processLimitRequest:error",
     );
     const shouldRetry = await classifyFailure(requestId, error, currentStep);
+    await updateOperationalRuntime({
+      workerStatus: error instanceof ManualInterventionError ? "WAITING_OPERATOR" : "IDLE",
+      sessionStatus: error instanceof ManualInterventionError ? "AUTH_REQUIRED" : "ERROR",
+      currentRequestId: requestId,
+      currentStep,
+      challengeType: error instanceof ManualInterventionError ? error.code : null,
+      statusMessage: error instanceof Error ? error.message : String(error),
+    });
     if (shouldRetry) throw error;
   } finally {
     await lock.release();

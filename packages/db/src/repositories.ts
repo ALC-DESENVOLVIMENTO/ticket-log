@@ -41,6 +41,175 @@ export interface DbAuditEventSummary {
   created_at: Date;
 }
 
+export interface OperationalRuntime {
+  service_key: string;
+  worker_instance_id: string;
+  worker_status: string;
+  session_status: string;
+  provider_mode: string;
+  real_execution_enabled: boolean;
+  headless: boolean;
+  station_enabled: boolean;
+  station_url: string | null;
+  storage_state_present: boolean;
+  persistent_profile_present: boolean;
+  current_request_id: string | null;
+  current_request_status?: string | null;
+  current_step: string | null;
+  current_url: string | null;
+  challenge_type: string | null;
+  status_message: string | null;
+  operator_user_id: string | null;
+  operator_name?: string | null;
+  operator_claimed_at: Date | null;
+  operator_claim_expires_at: Date | null;
+  heartbeat_at: Date;
+  updated_at: Date;
+}
+
+export async function ensureOperationalRuntimeSchema(): Promise<void> {
+  await getPool().query(`
+    create table if not exists operational_runtime (
+      service_key text primary key,
+      worker_instance_id text not null,
+      worker_status text not null,
+      session_status text not null,
+      provider_mode text not null,
+      real_execution_enabled boolean not null default false,
+      headless boolean not null default true,
+      station_enabled boolean not null default false,
+      station_url text,
+      storage_state_present boolean not null default false,
+      persistent_profile_present boolean not null default false,
+      current_request_id uuid,
+      current_step text,
+      current_url text,
+      challenge_type text,
+      status_message text,
+      operator_user_id uuid references users(id),
+      operator_claimed_at timestamptz,
+      operator_claim_expires_at timestamptz,
+      heartbeat_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+}
+
+export async function upsertOperationalRuntime(input: {
+  serviceKey?: string;
+  workerInstanceId: string;
+  workerStatus: string;
+  sessionStatus: string;
+  providerMode: string;
+  realExecutionEnabled: boolean;
+  headless: boolean;
+  stationEnabled: boolean;
+  stationUrl?: string | null;
+  storageStatePresent: boolean;
+  persistentProfilePresent: boolean;
+  currentRequestId?: string | null;
+  currentStep?: string | null;
+  currentUrl?: string | null;
+  challengeType?: string | null;
+  statusMessage?: string | null;
+}): Promise<void> {
+  await getPool().query(
+    `insert into operational_runtime(
+       service_key, worker_instance_id, worker_status, session_status, provider_mode,
+       real_execution_enabled, headless, station_enabled, station_url,
+       storage_state_present, persistent_profile_present, current_request_id,
+       current_step, current_url, challenge_type, status_message, heartbeat_at, updated_at
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now())
+     on conflict (service_key)
+     do update set worker_instance_id = excluded.worker_instance_id,
+                   worker_status = excluded.worker_status,
+                   session_status = excluded.session_status,
+                   provider_mode = excluded.provider_mode,
+                   real_execution_enabled = excluded.real_execution_enabled,
+                   headless = excluded.headless,
+                   station_enabled = excluded.station_enabled,
+                   station_url = excluded.station_url,
+                   storage_state_present = excluded.storage_state_present,
+                   persistent_profile_present = excluded.persistent_profile_present,
+                   current_request_id = excluded.current_request_id,
+                   current_step = excluded.current_step,
+                   current_url = excluded.current_url,
+                   challenge_type = excluded.challenge_type,
+                   status_message = excluded.status_message,
+                   heartbeat_at = now(),
+                   updated_at = now()`,
+    [
+      input.serviceKey ?? "ticketlog-worker",
+      input.workerInstanceId,
+      input.workerStatus,
+      input.sessionStatus,
+      input.providerMode,
+      input.realExecutionEnabled,
+      input.headless,
+      input.stationEnabled,
+      input.stationUrl ?? null,
+      input.storageStatePresent,
+      input.persistentProfilePresent,
+      input.currentRequestId ?? null,
+      input.currentStep ?? null,
+      input.currentUrl ?? null,
+      input.challengeType ?? null,
+      input.statusMessage ?? null,
+    ],
+  );
+}
+
+export async function getOperationalRuntime(serviceKey = "ticketlog-worker"): Promise<OperationalRuntime | null> {
+  const result = await getPool().query<OperationalRuntime>(
+    `select r.*, u.name as operator_name, q.status as current_request_status
+       from operational_runtime r
+       left join users u on u.id = r.operator_user_id
+       left join requests q on q.id = r.current_request_id
+      where r.service_key = $1`,
+    [serviceKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function claimOperationalRuntime(input: {
+  userId: string;
+  serviceKey?: string;
+  ttlMinutes?: number;
+}): Promise<OperationalRuntime | null> {
+  const result = await getPool().query<OperationalRuntime>(
+    `update operational_runtime
+        set operator_user_id = $2,
+            operator_claimed_at = now(),
+            operator_claim_expires_at = now() + ($3 * interval '1 minute'),
+            updated_at = now()
+      where service_key = $1
+        and (
+          operator_user_id is null
+          or operator_user_id = $2
+          or operator_claim_expires_at < now()
+        )
+      returning *`,
+    [input.serviceKey ?? "ticketlog-worker", input.userId, input.ttlMinutes ?? 15],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function releaseOperationalRuntime(input: {
+  userId: string;
+  serviceKey?: string;
+}): Promise<boolean> {
+  const result = await getPool().query(
+    `update operational_runtime
+        set operator_user_id = null,
+            operator_claimed_at = null,
+            operator_claim_expires_at = null,
+            updated_at = now()
+      where service_key = $1 and operator_user_id = $2`,
+    [input.serviceKey ?? "ticketlog-worker", input.userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function findUserByPhone(phoneE164: string): Promise<DbUser | null> {
   const result = await getPool().query<DbUser>(
     `select u.*
@@ -75,6 +244,18 @@ export async function listUsers(): Promise<DbUser[]> {
     "select id, name, employee_number, corporate_email, status, mfa_enabled from users order by name",
   );
   return result.rows;
+}
+
+export async function listUserRoles(userId: string): Promise<string[]> {
+  const result = await getPool().query<{ name: string }>(
+    `select r.name
+       from user_roles ur
+       join roles r on r.id = ur.role_id
+      where ur.user_id = $1
+      order by r.name`,
+    [userId],
+  );
+  return result.rows.map((row) => row.name);
 }
 
 export async function upsertUser(input: {

@@ -1,18 +1,21 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CheckCircle2,
   Clock,
+  ExternalLink,
   History,
   LogOut,
   RefreshCw,
   ShieldCheck,
+  Square,
   TerminalSquare,
   UserPlus,
   Users,
 } from "lucide-react";
 import {
   approveToken,
+  claimTicketLogOperation,
   createRequest,
   createUser,
   getApproval,
@@ -26,6 +29,7 @@ import {
   login,
   logout,
   retryRequest,
+  releaseTicketLogOperation,
   secondApprove,
   setSessionToken,
   setupMfa,
@@ -545,9 +549,10 @@ function HistoryPanel({ onSelectRequest }: { onSelectRequest: (requestId: string
   );
 }
 
-function OperationsPanel() {
+function OperationsPanel({ user }: { user: any }) {
   const [session, setSession] = useState<any>(null);
   const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
 
   async function refresh() {
     try {
@@ -560,32 +565,81 @@ function OperationsPanel() {
 
   useEffect(() => {
     refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => window.clearInterval(timer);
   }, []);
 
+  async function claim() {
+    setWorking(true);
+    try {
+      setSession(await claimTicketLogOperation());
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OPERATION_CLAIM_FAILED");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function release() {
+    setWorking(true);
+    try {
+      await releaseTicketLogOperation();
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OPERATION_RELEASE_FAILED");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function resumeRequest() {
+    if (!session?.currentRequestId) return;
+    setWorking(true);
+    try {
+      await retryRequest(session.currentRequestId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OPERATION_RESUME_FAILED");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const isMine = session?.operator?.userId === user?.id;
+  const heartbeat = session?.heartbeatAt
+    ? new Date(session.heartbeatAt).toLocaleString("pt-BR")
+    : "nao recebido";
+
   return (
-    <div className="grid operations-grid">
+    <div className="operations-layout">
       <section className="panel">
         <div className="panel-title">
-          <h2>Sessao operacional Ticket Log</h2>
-          <span>Modo assistido</span>
+          <h2>Estacao operacional Ticket Log</h2>
+          <span className={`status-pill ${session?.workerStatus === "OFFLINE" ? "danger" : session?.workerStatus === "WAITING_OPERATOR" ? "warning" : "success"}`}>
+            {session?.workerStatus ?? "CARREGANDO"}
+          </span>
         </div>
         {session && (
           <div className="result detail-card">
             <div className="detail-grid">
               <span>Provider: {session.providerMode}</span>
               <span>Execucao real: {session.realExecutionEnabled ? "ativa" : "desligada"}</span>
-              <span>Login manual: {session.allowManualLogin ? "habilitado" : "desabilitado"}</span>
+              <span>Sessao: {session.sessionStatus}</span>
+              <span>Heartbeat: {heartbeat}</span>
               <span>Perfil persistente: {session.userDataDirPresent ? "presente" : "nao detectado"}</span>
-              <span>Storage state: {session.sessionStoragePresent ? "presente" : "nao detectado"}</span>
-              <span>Embed Ticket Log: {session.canEmbedTicketLog ? "suportado" : "bloqueado"}</span>
+              <span>Storage state: {session.storageStatePresent ? "presente" : "nao detectado"}</span>
+              <span>Solicitacao: {session.currentRequestId ?? "nenhuma"}</span>
+              <span>Status da solicitacao: {session.currentRequestStatus ?? "n/d"}</span>
+              <span>Etapa: {session.currentStep ?? "ocioso"}</span>
             </div>
-            <div className="hint">
-              {session.operatorGuidance}
+            <div className={session.workerStatus === "WAITING_OPERATOR" ? "warning-box" : "hint"}>
+              <strong>{session.statusMessage ?? session.message ?? "Aguardando atividade"}</strong>
+              {session.challengeType && <span>Desafio detectado: {session.challengeType}</span>}
             </div>
-            {!session.canEmbedTicketLog && (
-              <div className="result subtle-block">
-                <strong>Por que nao mostramos a Ticket Log dentro deste painel?</strong>
-                <span>{session.embedBlockedReason}</span>
+            {session.operator && (
+              <div className="operator-claim">
+                Em uso por <strong>{session.operator.name ?? session.operator.userId}</strong>
               </div>
             )}
             <div className="action-row">
@@ -593,6 +647,24 @@ function OperationsPanel() {
                 <RefreshCw size={18} />
                 Atualizar estado
               </button>
+              {!session.operator && session.stationAvailable && (
+                <button type="button" onClick={claim} disabled={working}>
+                  <TerminalSquare size={18} />
+                  Assumir estacao
+                </button>
+              )}
+              {isMine && (
+                <button type="button" className="secondary" onClick={release} disabled={working}>
+                  <Square size={16} />
+                  Encerrar acesso
+                </button>
+              )}
+              {isMine && session.currentRequestStatus === "FALHA_MANUAL" && (
+                <button type="button" onClick={resumeRequest} disabled={working}>
+                  <RefreshCw size={18} />
+                  Retomar solicitacao
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -622,6 +694,40 @@ function OperationsPanel() {
             <span>Se o limite ja mudou, o sistema pula direto para EVA; se nao, continua da alteracao.</span>
           </div>
         </div>
+      </section>
+
+      <section className="panel station-panel">
+        <div className="panel-title">
+          <h2>Tela do navegador</h2>
+          <span>Takeover humano</span>
+        </div>
+        {isMine && session?.stationUrl ? (
+          <>
+            <div className="station-toolbar">
+              <span>Digite a senha operacional do VNC quando solicitada.</span>
+              <a href={session.stationUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} />
+                Abrir em nova aba
+              </a>
+            </div>
+            <iframe
+              className="station-frame"
+              src={session.stationUrl}
+              title="Estacao operacional Ticket Log"
+              allow="clipboard-read; clipboard-write"
+            />
+          </>
+        ) : (
+          <div className="station-empty">
+            <TerminalSquare size={36} />
+            <strong>
+              {session?.stationAvailable
+                ? "Assuma a estacao para visualizar o navegador."
+                : "Estacao remota ainda nao configurada no worker."}
+            </strong>
+            <span>A tela aparece aqui sem incorporar diretamente o dominio da Ticket Log.</span>
+          </div>
+        )}
       </section>
     </div>
   );
@@ -696,8 +802,6 @@ function UsersPanel() {
 function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: any; onLogout: () => void }) {
   const [view, setView] = useState<AppView>("request");
   const [activeRequestId, setActiveRequestId] = useState("");
-  const mode = useMemo(() => import.meta.env.VITE_TICKETLOG_MODE ?? "simulation", []);
-
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -715,7 +819,7 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
         <header>
           <div>
             <h1>Limite temporario</h1>
-            <p>{publicConfig?.companyName ?? "ALC & Pereira Filho Transportes"} - modo <strong>{mode}</strong></p>
+            <p>{publicConfig?.companyName ?? "ALC & Pereira Filho Transportes"} - ambiente <strong>{publicConfig?.executionMode ?? "operacional"}</strong></p>
           </div>
           <button className="secondary" onClick={onLogout}><LogOut size={18} /> Sair</button>
         </header>
@@ -732,7 +836,7 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
             <StatusPanel initialLookupId={activeRequestId} />
           </div>
         )}
-        {view === "operations" && <OperationsPanel />}
+        {view === "operations" && <OperationsPanel user={user} />}
         {view === "users" && <UsersPanel />}
       </section>
     </main>

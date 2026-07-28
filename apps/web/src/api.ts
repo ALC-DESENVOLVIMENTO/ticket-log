@@ -163,6 +163,20 @@ export async function getTicketLogSessionStatus() {
   });
 }
 
+export async function claimTicketLogOperation() {
+  return jsonFetch("/operations/ticketlog/claim", {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}
+
+export async function releaseTicketLogOperation() {
+  return jsonFetch("/operations/ticketlog/release", {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}
+
 export async function listUsers() {
   return jsonFetch("/admin/users", {
     headers: devHeaders(),

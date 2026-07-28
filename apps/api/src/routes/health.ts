@@ -8,6 +8,9 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/config/public", async () => ({
     companyName: config.companyName,
+    executionMode:
+      process.env.APP_EXECUTION_MODE ??
+      (process.env.NODE_ENV === "production" ? "operacional" : "simulacao"),
     approvalTtlMinutes: config.approvalTtlMinutes,
     vehicleGroups: Object.entries(config.groupPolicies).map(([key, policy]) => ({
       key,

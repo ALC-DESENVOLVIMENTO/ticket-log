@@ -2,7 +2,13 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { IndeterminateResultError, normalizePlate, ManualInterventionError } from "@ticketlog/domain";
-import type { TicketLogLimitInput, TicketLogLimitResult, TicketLogProvider } from "../provider.js";
+import type {
+  TicketLogLimitInput,
+  TicketLogLimitResult,
+  TicketLogProvider,
+  TicketLogProviderHooks,
+  TicketLogOperationalEvent,
+} from "../provider.js";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
 import { hasStorageStateFile, hasUserDataDirState, resolveStorageStatePath, resolveUserDataDir } from "./sessionConfig.js";
@@ -12,7 +18,43 @@ interface BrowserSession {
   close(): Promise<void>;
 }
 
+let sharedContextPromise: Promise<BrowserContext> | undefined;
+
+async function launchSharedPersistentContext(): Promise<BrowserContext> {
+  const userDataDir = resolveUserDataDir();
+  if (!userDataDir) {
+    throw new ManualInterventionError("TICKETLOG_USER_DATA_DIR_REQUIRED_FOR_STATION");
+  }
+  await mkdir(userDataDir, { recursive: true });
+  return chromium.launchPersistentContext(userDataDir, {
+    headless: process.env.TICKETLOG_HEADLESS !== "false",
+    viewport: process.env.TICKETLOG_HEADLESS === "false" ? null : undefined,
+    args: process.env.TICKETLOG_HEADLESS === "false" ? ["--start-maximized"] : undefined,
+  });
+}
+
+export async function initializeBrowserStation(): Promise<void> {
+  if (process.env.TICKETLOG_STATION_MODE !== "true") return;
+  sharedContextPromise ??= launchSharedPersistentContext();
+  const context = await sharedContextPromise;
+  const pages = context.pages();
+  const page = pages[0] ?? await context.newPage();
+  if (page.url() === "about:blank") {
+    await page.goto(process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home");
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+  }
+}
+
+export async function closeBrowserStation(): Promise<void> {
+  if (!sharedContextPromise) return;
+  const context = await sharedContextPromise;
+  sharedContextPromise = undefined;
+  await context.close();
+}
+
 export class BrowserTicketLogProvider implements TicketLogProvider {
+  constructor(private readonly hooks: TicketLogProviderHooks = {}) {}
+
   async changeLimit(input: TicketLogLimitInput): Promise<TicketLogLimitResult> {
     this.assertRealExecutionAllowed(input);
 
@@ -22,7 +64,9 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     try {
       console.info({ requestId: input.requestId, plate: input.vehiclePlate }, "ticketlog.changeLimit:start");
+      await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao Ticket Log" });
       await this.ensureAuthenticated(page);
+      await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Alterando limite do veiculo" });
       console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:authenticated");
 
       const fleet = new FleetVehiclePage(page);
@@ -96,6 +140,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
         platformResult,
       };
     } finally {
+      await page.close().catch(() => undefined);
       await session.close();
     }
   }
@@ -108,7 +153,9 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const page = await context.newPage();
     try {
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:start");
+      await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao para EVA" });
       await this.ensureAuthenticated(page);
+      await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Liberando restricao pela EVA" });
       await this.openEvaHostPage(page);
       console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
       const eva = new EvaPage(page);
@@ -118,6 +165,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:released");
       await this.saveStorageState(context);
     } finally {
+      await page.close().catch(() => undefined);
       await session.close();
     }
   }
@@ -125,11 +173,25 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   private async createBrowserSession(): Promise<BrowserSession> {
     const headless = process.env.TICKETLOG_HEADLESS !== "false";
     const userDataDir = resolveUserDataDir();
+    const stationMode = process.env.TICKETLOG_STATION_MODE === "true";
+
+    if (stationMode) {
+      if (!userDataDir) {
+        throw new ManualInterventionError("TICKETLOG_USER_DATA_DIR_REQUIRED_FOR_STATION");
+      }
+      if (!sharedContextPromise) {
+        sharedContextPromise = launchSharedPersistentContext();
+      }
+      return {
+        context: await sharedContextPromise,
+        close: async () => undefined,
+      };
+    }
+
     const canUsePersistentProfile = userDataDir ? await hasUserDataDirState() : false;
 
     if (userDataDir && canUsePersistentProfile) {
-      await mkdir(userDataDir, { recursive: true });
-      const context = await chromium.launchPersistentContext(userDataDir, { headless });
+      const context = await this.launchPersistentContext(userDataDir, headless);
       return {
         context,
         close: () => context.close(),
@@ -142,6 +204,15 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       context,
       close: () => browser.close(),
     };
+  }
+
+  private async launchPersistentContext(userDataDir: string, headless: boolean): Promise<BrowserContext> {
+    await mkdir(userDataDir, { recursive: true });
+    return chromium.launchPersistentContext(userDataDir, {
+      headless,
+      viewport: headless ? undefined : null,
+      args: headless ? undefined : ["--start-maximized"],
+    });
   }
 
   private async createContext(browser: Browser): Promise<BrowserContext> {
@@ -175,7 +246,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
 
     if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
+      await this.emit({
+        status: "AUTH_REQUIRED",
+        currentUrl: page.url(),
+        challengeType: this.challengeType(page.url()),
+        message: "Aguardando operador concluir autenticacao Edenred",
+      });
       await this.waitForManualLogin(page);
+      await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
       return;
     }
 
@@ -192,7 +270,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     if ((userFieldVisible || passwordFieldVisible) && (!username || !password)) {
       if (allowManualLogin) {
+        await this.emit({
+          status: "AUTH_REQUIRED",
+          currentUrl: page.url(),
+          challengeType: "LOGIN",
+          message: "Aguardando operador concluir login Ticket Log",
+        });
         await this.waitForManualLogin(page);
+        await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
         return;
       }
       throw new ManualInterventionError("TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN");
@@ -207,7 +292,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await page.goto(process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list");
       await page.waitForLoadState("domcontentloaded").catch(() => undefined);
       if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
+        await this.emit({
+          status: "AUTH_REQUIRED",
+          currentUrl: page.url(),
+          challengeType: this.challengeType(page.url()),
+          message: "Aguardando operador concluir desafio Edenred",
+        });
         await this.waitForManualLogin(page);
+        await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
         return;
       }
       if (await page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
@@ -220,6 +312,18 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     if (loginFieldStillVisible || passwordFieldStillVisible) {
       throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
     }
+    await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
+  }
+
+  private challengeType(url: string): string {
+    if (/trusted-device/i.test(url)) return "TRUSTED_DEVICE";
+    if (/otp/i.test(url)) return "OTP_SMS";
+    if (/captcha/i.test(url)) return "CAPTCHA";
+    return "AUTHENTICATION";
+  }
+
+  private async emit(event: TicketLogOperationalEvent): Promise<void> {
+    await this.hooks.onOperationalEvent?.(event);
   }
 
   private async requiresHumanChallenge(page: Page): Promise<boolean> {
