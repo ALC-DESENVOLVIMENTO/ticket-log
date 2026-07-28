@@ -203,9 +203,29 @@ export class FleetVehiclePage {
       );
     }
 
-    const plateCheckbox = row.first().locator("input[type='checkbox'][name='chklimite']").first();
+    let plateCheckbox = row.first().locator("input[type='checkbox'][name='chklimite']").first();
     await expect(plateCheckbox).toBeVisible();
-    await plateCheckbox.check({ force: true });
+    if (!(await plateCheckbox.isChecked())) {
+      await plateCheckbox.click({ force: true }).catch(() => undefined);
+      await this.page.waitForTimeout(500);
+      plateCheckbox = formFrame
+        .locator("tr")
+        .filter({ hasText: normalizedPlate })
+        .first()
+        .locator("input[type='checkbox'][name='chklimite']")
+        .first();
+    }
+
+    if (!(await plateCheckbox.isChecked())) {
+      await plateCheckbox.evaluate((element) => {
+        const checkbox = element as HTMLInputElement;
+        checkbox.checked = true;
+        checkbox.setAttribute("checked", "checked");
+        checkbox.dispatchEvent(new Event("input", { bubbles: true }));
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+
     await expect(plateCheckbox).toBeChecked();
   }
 
