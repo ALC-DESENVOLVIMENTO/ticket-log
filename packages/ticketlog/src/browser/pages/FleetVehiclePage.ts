@@ -24,17 +24,17 @@ export class FleetVehiclePage {
     const normalized = normalizePlate(plate);
     const plateSearch = await this.findVisible(
       [
-        this.page.getByLabel(/placa|identificador/i),
-        this.page.getByPlaceholder(/placa|identificador|pesquise|busque|buscar na tabela/i),
+        this.page.getByLabel(/placa|plate|identificador|identifier/i),
+        this.page.getByPlaceholder(/placa|plate|identificador|identifier|pesquise|busque|search|buscar na tabela/i),
         this.page.locator("input:visible").first(),
-        this.page.getByRole("textbox").filter({ hasText: /placa|identificador/i }),
+        this.page.getByRole("textbox").filter({ hasText: /placa|plate|identificador|identifier/i }),
         this.page.getByRole("textbox").first(),
       ],
       "PLATE_SEARCH_INPUT_NOT_FOUND",
     );
 
     await plateSearch.fill(normalized);
-    const searchButton = this.page.getByRole("button", { name: /pesquisar|buscar|filtrar/i }).first();
+    const searchButton = this.page.getByRole("button", { name: /pesquisar|buscar|filtrar|search|filter/i }).first();
     if (await searchButton.isVisible().catch(() => false)) {
       await searchButton.click();
     } else {
@@ -59,7 +59,7 @@ export class FleetVehiclePage {
     );
     await plateLink.click();
     await expect(this.page.getByText(normalized).first()).toBeVisible();
-    await expect(this.page.getByText(/detalhes do ve.culo/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(this.page.getByText(/detalhes do ve.culo|vehicle details/i).first()).toBeVisible({ timeout: 30_000 });
   }
 
   async isBlocked(): Promise<boolean> {
@@ -71,13 +71,13 @@ export class FleetVehiclePage {
   }
 
   async unblockVehicle(): Promise<void> {
-    await this.page.getByRole("button", { name: /desbloquear/i }).click();
-    await this.page.getByRole("button", { name: /confirmar|sim/i }).click();
-    await expect(this.page.getByText(/desbloquead[oa].*sucesso|ativo/i)).toBeVisible();
+    await this.page.getByRole("button", { name: /desbloquear|unblock/i }).click();
+    await this.page.getByRole("button", { name: /confirmar|sim|confirm|yes/i }).click();
+    await expect(this.page.getByText(/desbloquead[oa].*sucesso|unblocked.*success|ativo|active/i)).toBeVisible();
   }
 
   async readCurrentLimit(): Promise<number | null> {
-    const label = this.page.getByText(/limite atual|limite total/i).first();
+    const label = this.page.getByText(/limite atual|limite total|current limit|total limit/i).first();
     if (!(await label.isVisible().catch(() => false))) return null;
     const text = await label.locator("..").innerText();
     const match = text.replace(/\./g, "").replace(",", ".").match(/(\d+(?:\.\d{2})?)/);
@@ -124,8 +124,8 @@ export class FleetVehiclePage {
     const attempts: string[] = [];
     const direct = await this.findVisible(
       [
-        this.page.getByRole("button", { name: /altera..o de limite|alterar limite/i }),
-        this.page.getByRole("link", { name: /altera..o de limite|alterar limite/i }),
+        this.page.getByRole("button", { name: /altera..o de limite|alterar limite|change limit/i }),
+        this.page.getByRole("link", { name: /altera..o de limite|alterar limite|change limit/i }),
       ],
       "CHANGE_LIMIT_DIRECT_ENTRYPOINT_NOT_FOUND",
     ).catch(() => null);
@@ -135,7 +135,7 @@ export class FleetVehiclePage {
       if (await this.clickAndConfirmChangeLimit(direct)) return;
     }
 
-    const text = this.page.getByText(/^\s*alterar\s+limite\s*$/i).first();
+    const text = this.page.getByText(/^\s*(?:alterar\s+limite|change\s+limit)\s*$/i).first();
     if (!(await text.isVisible().catch(() => false))) {
       throw new ManualInterventionError("CHANGE_LIMIT_ENTRYPOINT_NOT_FOUND");
     }
@@ -212,7 +212,7 @@ export class FleetVehiclePage {
   private async waitForLimitChangeConfirmation(): Promise<string | null> {
     const deadline = Date.now() + 60_000;
     const successPattern =
-      /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar/i;
+      /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar|limit.*(?:changed|updated).*success|operation.*success|successfully.*(?:changed|updated)/i;
 
     while (Date.now() < deadline) {
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -225,9 +225,9 @@ export class FleetVehiclePage {
 
       const formStillOpen = await this.waitForChangeLimitFrame(1_000);
       if (!formStillOpen) {
-        const detailsVisible = await this.page.getByText(/detalhes do ve.culo/i).first().isVisible().catch(() => false);
-        const limitVisible = await this.page.getByText(/limite atual|limite total/i).first().isVisible().catch(() => false);
-        const changeCardVisible = await this.page.getByText(/^\s*alterar\s+limite\s*$/i).first().isVisible().catch(() => false);
+        const detailsVisible = await this.page.getByText(/detalhes do ve.culo|vehicle details/i).first().isVisible().catch(() => false);
+        const limitVisible = await this.page.getByText(/limite atual|limite total|current limit|total limit/i).first().isVisible().catch(() => false);
+        const changeCardVisible = await this.page.getByText(/^\s*(?:alterar\s+limite|change\s+limit)\s*$/i).first().isVisible().catch(() => false);
 
         if (detailsVisible && (limitVisible || changeCardVisible)) {
           return "ALTERACAO_SUBMETIDA_SEM_BANNER_EXPLICITO";
@@ -268,7 +268,7 @@ export class FleetVehiclePage {
       const rows = this.page.getByRole("row").filter({ hasText: plate });
       if ((await rows.count()) > 0) return;
 
-      const emptyState = this.page.getByText(/nenhum registro|nenhum resultado|n.o encontrado|sem resultado/i).first();
+      const emptyState = this.page.getByText(/nenhum registro|nenhum resultado|n.o encontrado|sem resultado|no records|no results|not found/i).first();
       if (await emptyState.isVisible().catch(() => false)) return;
 
       await this.page.waitForTimeout(500);
@@ -297,9 +297,9 @@ export class FleetVehiclePage {
       }
 
       const signals = [
-        this.page.getByPlaceholder(/buscar na tabela/i).first(),
-        this.page.getByText(/meus ve.culos\s*\/\s*equipamentos/i).first(),
-        this.page.getByText(/placa\s*\/\s*identificador/i).first(),
+        this.page.getByPlaceholder(/buscar na tabela|search.*table/i).first(),
+        this.page.getByText(/meus ve.culos\s*\/\s*equipamentos|my vehicles\s*\/\s*equipment/i).first(),
+        this.page.getByText(/placa\s*\/\s*identificador|plate\s*\/\s*identifier/i).first(),
       ];
 
       for (const signal of signals) {
@@ -315,10 +315,10 @@ export class FleetVehiclePage {
   private async clickVehicleListEntrypoint(): Promise<void> {
     const entrypoint = await this.findVisible(
       [
-        this.page.getByText(/^\s*ve.culo\s*$/i).first(),
-        this.page.getByText(/^\s*equipamento\s*$/i).first(),
-        this.page.getByRole("link", { name: /ve.culo|equipamento/i }).first(),
-        this.page.getByRole("button", { name: /ve.culo|equipamento/i }).first(),
+        this.page.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
+        this.page.getByText(/^\s*(?:equipamento|equipment)\s*$/i).first(),
+        this.page.getByRole("link", { name: /ve.culo|vehicle|equipamento|equipment/i }).first(),
+        this.page.getByRole("button", { name: /ve.culo|vehicle|equipamento|equipment/i }).first(),
       ],
       "VEHICLE_LIST_ENTRYPOINT_NOT_FOUND",
       30_000,
@@ -390,9 +390,17 @@ export class FleetVehiclePage {
 
       for (const scope of [this.page, ...this.page.frames()]) {
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+        const stableFormFieldsVisible =
+          (await scope.locator("input#valor, input[name='valor']").first().isVisible().catch(() => false)) &&
+          (await scope
+            .locator("input[type='radio'][name='tipo'][value='AR']")
+            .first()
+            .isVisible()
+            .catch(() => false));
         if (
-          /valor\s+para\s+altera/i.test(bodyText) &&
-          /adicionar\s+o\s+valor\s+ao\s+limite\s+atual/i.test(bodyText)
+          stableFormFieldsVisible ||
+          (/valor\s+para\s+altera|value\s+to\s+change/i.test(bodyText) &&
+            /adicionar\s+o\s+valor\s+ao\s+limite\s+atual|add.*value.*current limit/i.test(bodyText))
         ) {
           return scope;
         }

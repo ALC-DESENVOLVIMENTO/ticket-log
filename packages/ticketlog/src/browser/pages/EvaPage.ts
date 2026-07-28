@@ -33,7 +33,7 @@ export class EvaPage {
     await textbox.fill(normalizePlate(plate));
 
     await this.findVisible([
-      frame.getByRole("button", { name: /enviar|confirmar/i }),
+      frame.getByRole("button", { name: /enviar|confirmar|send|confirm/i }),
       frame.locator("button:visible").last(),
     ]).then((locator) => locator.click());
 
@@ -60,8 +60,8 @@ export class EvaPage {
     await this.open();
     const frame = await this.requireEvaFrame();
 
-    await this.clickEvaOption(frame, /^transa..es/i);
-    await this.clickEvaOption(frame, /liberar abastecimento.*restri/i);
+    await this.clickEvaOption(frame, /^(?:transa..es|transactions)/i);
+    await this.clickEvaOption(frame, /liberar abastecimento.*restri|release fuel.*restrict/i);
     return frame;
   }
 
@@ -87,7 +87,7 @@ export class EvaPage {
       for (const frame of this.page.frames()) {
         const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
         if (frame.url().includes("eva-front.edenred.com.br")) return frame;
-        if (/sou a eva|digite sobre o que deseja falar|digite aqui sua d.vida/i.test(body)) return frame;
+        if (/sou a eva|i am eva|digite sobre o que deseja falar|type what you want|digite aqui sua d.vida|type your question/i.test(body)) return frame;
       }
 
       await this.page.waitForTimeout(500);
@@ -98,7 +98,8 @@ export class EvaPage {
 
   private async waitForEvaConfirmation(frame: Frame): Promise<string | null> {
     const deadline = Date.now() + 60_000;
-    const successPattern = /libera..o conclu.da|abastecimento liberado|restri..o liberada|fiz a libera..o da restri/i;
+    const successPattern =
+      /libera..o conclu.da|abastecimento liberado|restri..o liberada|fiz a libera..o da restri|release completed|fueling released|restriction released/i;
 
     while (Date.now() < deadline) {
       const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
