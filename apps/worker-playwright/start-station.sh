@@ -19,6 +19,10 @@ export DISPLAY="${DISPLAY:-:99}"
 mkdir -p /data/ticketlog-session/profile
 
 display_number="${DISPLAY#:}"
+pkill -f "chrome|chromium" 2>/dev/null || true
+rm -f /data/ticketlog-session/profile/SingletonLock \
+  /data/ticketlog-session/profile/SingletonCookie \
+  /data/ticketlog-session/profile/SingletonSocket
 pkill Xvfb 2>/dev/null || true
 rm -f "/tmp/.X${display_number}-lock" "/tmp/.X11-unix/X${display_number}"
 Xvfb "$DISPLAY" -screen 0 1440x900x24 -ac +extension GLX +render -noreset &
