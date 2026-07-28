@@ -150,6 +150,13 @@ export async function secondApprove(requestId: string) {
   });
 }
 
+export async function createApprovalLink(requestId: string) {
+  return jsonFetch(`/requests/${requestId}/approval-link`, {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}
+
 export async function retryRequest(requestId: string) {
   return jsonFetch(`/requests/${requestId}/retry`, {
     method: "POST",

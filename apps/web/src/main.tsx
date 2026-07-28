@@ -17,6 +17,7 @@ import {
 import {
   approveToken,
   claimTicketLogOperation,
+  createApprovalLink,
   createRequest,
   createUser,
   getApproval,
@@ -406,6 +407,16 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
     }
   }
 
+  async function openFirstApproval() {
+    setLookupError("");
+    try {
+      const result = await createApprovalLink(request.id);
+      window.location.assign(result.approvalUrl);
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : "APPROVAL_LINK_FAILED");
+    }
+  }
+
   async function retryCurrentRequest() {
     setLookupError("");
     try {
@@ -450,6 +461,12 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
             <span>Criado em: {request.created_at ? new Date(request.created_at).toLocaleString("pt-BR") : "n/d"}</span>
           </div>
           <div className="action-row">
+            {["AGUARDANDO_AUTENTICACAO", "AGUARDANDO_APROVACAO"].includes(request.status) && (
+              <button type="button" onClick={openFirstApproval}>
+                <CheckCircle2 size={18} />
+                Abrir aprovacao
+              </button>
+            )}
             {request.status === "AGUARDANDO_SEGUNDA_APROVACAO" && (
               <button type="button" onClick={approveSecond}>
                 <ShieldCheck size={18} />

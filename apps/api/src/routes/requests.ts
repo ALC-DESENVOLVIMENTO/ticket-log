@@ -9,6 +9,7 @@ import {
   type VehicleGroup,
 } from "@ticketlog/domain";
 import {
+  appendAuditEvent,
   createApprovalToken,
   createRequest,
   getPool,
@@ -125,6 +126,34 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const steps = stepsResult.rows;
     const events = eventsResult.rows;
     return { request: found, steps, events };
+  });
+
+  app.post("/requests/:id/approval-link", async (request, reply) => {
+    const user = await getAuthenticatedUser(request);
+    const params = request.params as { id: string };
+    const found = await getRequest(params.id);
+    if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
+    if (found.requester_id !== user.id) {
+      return reply.code(403).send({ error: "APPROVAL_LINK_NOT_ALLOWED" });
+    }
+    if (!["AGUARDANDO_AUTENTICACAO", "AGUARDANDO_APROVACAO"].includes(found.status)) {
+      return reply.code(409).send({ error: "REQUEST_NOT_WAITING_FIRST_APPROVAL" });
+    }
+    if (new Date(found.expires_at).getTime() <= Date.now()) {
+      return reply.code(410).send({ error: "REQUEST_EXPIRED" });
+    }
+
+    const token = await createApprovalToken(found.id, user.id, found.expires_at);
+    await appendAuditEvent({
+      requestId: found.id,
+      actorUserId: user.id,
+      eventType: "APPROVAL_LINK_REISSUED",
+      payload: { expiresAt: found.expires_at },
+    });
+    return {
+      approvalUrl: `${config.appBaseUrl}/approval/${token}`,
+      expiresAt: found.expires_at,
+    };
   });
 
   app.post("/requests/:id/retry", async (request, reply) => {
