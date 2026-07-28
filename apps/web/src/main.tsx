@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CheckCircle2,
+  Copy,
   Clock,
   ExternalLink,
   History,
@@ -606,6 +607,16 @@ function OperationsPanel({ user }: { user: any }) {
     }
   }
 
+  async function copyStationPassword() {
+    if (!session?.stationPassword) return;
+    try {
+      await navigator.clipboard.writeText(session.stationPassword);
+      setError("");
+    } catch {
+      setError("Nao foi possivel copiar a senha. Selecione o campo e copie manualmente.");
+    }
+  }
+
   const isMine = session?.operator?.userId === user?.id;
   const heartbeat = session?.heartbeatAt
     ? new Date(session.heartbeatAt).toLocaleString("pt-BR")
@@ -704,7 +715,26 @@ function OperationsPanel({ user }: { user: any }) {
         {isMine && session?.stationUrl ? (
           <>
             <div className="station-toolbar">
-              <span>Digite a senha operacional do VNC quando solicitada.</span>
+              <div className="station-password">
+                <label htmlFor="station-password">Senha VNC</label>
+                <input
+                  id="station-password"
+                  type="password"
+                  readOnly
+                  value={session.stationPassword ?? ""}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="icon-button secondary"
+                  onClick={copyStationPassword}
+                  disabled={!session.stationPassword}
+                  title="Copiar senha VNC"
+                  aria-label="Copiar senha VNC"
+                >
+                  <Copy size={16} />
+                </button>
+              </div>
               <a href={session.stationUrl} target="_blank" rel="noreferrer">
                 <ExternalLink size={16} />
                 Abrir em nova aba

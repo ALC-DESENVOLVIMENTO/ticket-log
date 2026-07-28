@@ -68,7 +68,7 @@ http {
 
     location / {
       if (\$station_authorized = 0) { return 403; }
-      add_header Set-Cookie "station_access=${TICKETLOG_OPERATOR_ACCESS_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict" always;
+      add_header Set-Cookie "station_access=${TICKETLOG_OPERATOR_ACCESS_TOKEN}; Path=/; HttpOnly; Secure; SameSite=None" always;
       proxy_pass http://127.0.0.1:6080;
       proxy_http_version 1.1;
       proxy_set_header Upgrade \$http_upgrade;

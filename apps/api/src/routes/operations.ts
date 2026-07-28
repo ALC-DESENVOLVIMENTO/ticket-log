@@ -44,6 +44,7 @@ function publicRuntime(runtime: Awaited<ReturnType<typeof getOperationalRuntime>
       stale: true,
       stationEnabled: false,
       stationUrl: null,
+      stationPassword: null,
       message: "Worker ainda nao publicou estado operacional.",
     };
   }
@@ -64,6 +65,10 @@ function publicRuntime(runtime: Awaited<ReturnType<typeof getOperationalRuntime>
     headless: runtime.headless,
     stationEnabled: runtime.station_enabled,
     stationUrl: claimActive && runtime.operator_user_id === viewerUserId ? stationUrl : null,
+    stationPassword:
+      claimActive && runtime.operator_user_id === viewerUserId
+        ? process.env.TICKETLOG_OPERATOR_PASSWORD ?? null
+        : null,
     stationAvailable: Boolean(stationUrl),
     storageStatePresent: runtime.storage_state_present,
     userDataDirPresent: runtime.persistent_profile_present,
@@ -88,6 +93,7 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
   app.get("/operations/ticketlog/session", async (request, reply) => {
     const access = await requireOperator(request, reply);
     if (!access) return;
+    reply.header("Cache-Control", "no-store");
     await ensureOperationalRuntimeSchema();
     return publicRuntime(await getOperationalRuntime(serviceKey), access.user.id);
   });
@@ -95,6 +101,7 @@ export async function operationRoutes(app: FastifyInstance): Promise<void> {
   app.post("/operations/ticketlog/claim", async (request, reply) => {
     const access = await requireOperator(request, reply);
     if (!access) return;
+    reply.header("Cache-Control", "no-store");
     await ensureOperationalRuntimeSchema();
     const runtime = await claimOperationalRuntime({
       serviceKey,

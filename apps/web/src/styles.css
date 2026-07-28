@@ -537,6 +537,27 @@ pre {
   font-weight: 700;
 }
 
+.station-password {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(140px, 220px) 36px;
+}
+
+.station-password label {
+  font-weight: 700;
+}
+
+.station-password input {
+  height: 36px;
+}
+
+.station-password .icon-button {
+  height: 36px;
+  padding: 0;
+  width: 36px;
+}
+
 .station-frame {
   background: #111;
   border: 1px solid var(--line);
