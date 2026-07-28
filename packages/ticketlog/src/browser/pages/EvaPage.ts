@@ -7,10 +7,15 @@ export class EvaPage {
   async open(): Promise<void> {
     if (await this.getEvaFrame(1_000)) return;
 
-    const evaButton = await this.findVisible([
-      this.page.locator("button.eva-button, button[aria-label='EVA']").first(),
-      this.page.getByRole("button", { name: /eva|assistente virtual/i }).first(),
-    ]).catch(() => null);
+    const evaButton = await this.waitForVisible(
+      [
+        this.page.locator("#ge-fab, #gea-fab, #movebutton, #buttoneva").first(),
+        this.page.locator("button.eva-button, button[aria-label='EVA']").first(),
+        this.page.getByRole("button", { name: /eva|assistente virtual/i }).first(),
+        this.page.locator("img#fotoeva, img[src*='eva' i], img[alt*='eva' i]").first(),
+      ],
+      30_000,
+    ).catch(() => null);
 
     if (!evaButton) {
       throw new ManualInterventionError("EVA_BUTTON_NOT_FOUND");
