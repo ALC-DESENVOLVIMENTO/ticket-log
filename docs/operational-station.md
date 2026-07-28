@@ -45,11 +45,12 @@ servicos `api` e `worker-playwright`. O token nao e persistido no banco.
 2. A aba Operacao atualiza o estado a cada dez segundos.
 3. Um aprovador ou administrador clica em `Assumir estacao`.
 4. O painel libera a tela somente para esse usuario por quinze minutos.
-5. O operador informa a senha VNC e conclui apenas o desafio da Edenred.
-6. Se o job ainda estiver aguardando, ele continua automaticamente.
-7. Se a solicitacao ja estiver em `FALHA_MANUAL`, o operador usa
+5. O painel disponibiliza a senha VNC ao operador que possui o claim ativo.
+6. O operador copia a senha, conecta ao navegador e conclui apenas o desafio da Edenred.
+7. Se o job ainda estiver aguardando, ele continua automaticamente.
+8. Se a solicitacao ja estiver em `FALHA_MANUAL`, o operador usa
    `Retomar solicitacao`.
-8. O operador encerra o acesso ao terminar.
+9. O operador encerra o acesso ao terminar.
 
 ## Controles
 
@@ -59,7 +60,9 @@ servicos `api` e `worker-playwright`. O token nao e persistido no banco.
 - o heartbeat diferencia worker online de estado antigo;
 - o perfil do Chromium fica no volume persistente;
 - nginx exige um token de acesso antes de expor o noVNC;
-- a senha operacional deve existir somente nas variaveis protegidas do Railway;
+- a senha operacional fica nas variaveis protegidas do Railway e so e retornada
+  pela API ao operador com claim ativo, com resposta `Cache-Control: no-store`;
+- a senha operacional nao e persistida no banco, logs ou eventos de auditoria;
 - a estacao deve permanecer com uma replica para evitar corrupcao do perfil.
 
 Esta solucao nao contorna MFA, CAPTCHA ou antifraude. Ela fornece uma forma
