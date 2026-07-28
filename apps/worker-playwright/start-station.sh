@@ -18,8 +18,19 @@ fi
 export DISPLAY="${DISPLAY:-:99}"
 mkdir -p /data/ticketlog-session/profile
 
+display_number="${DISPLAY#:}"
+pkill Xvfb 2>/dev/null || true
+rm -f "/tmp/.X${display_number}-lock" "/tmp/.X11-unix/X${display_number}"
 Xvfb "$DISPLAY" -screen 0 1440x900x24 -ac +extension GLX +render -noreset &
-sleep 1
+for _ in $(seq 1 20); do
+  [[ -S "/tmp/.X11-unix/X${display_number}" ]] && break
+  sleep 0.25
+done
+
+if [[ ! -S "/tmp/.X11-unix/X${display_number}" ]]; then
+  echo "Xvfb failed to create display socket for ${DISPLAY}" >&2
+  exit 1
+fi
 
 x11vnc -storepasswd "$TICKETLOG_OPERATOR_PASSWORD" /tmp/ticketlog-vnc.pass >/dev/null
 x11vnc \
@@ -40,6 +51,7 @@ cat >/tmp/ticketlog-station-nginx.conf <<EOF
 events {}
 http {
   access_log off;
+  map_hash_bucket_size 128;
   map "\$arg_access:\$cookie_station_access" \$station_authorized {
     default 0;
     "${TICKETLOG_OPERATOR_ACCESS_TOKEN}:" 1;
