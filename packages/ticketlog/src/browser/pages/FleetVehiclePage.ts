@@ -253,11 +253,21 @@ export class FleetVehiclePage {
   private async waitForVehicleListReady(timeoutMs = 30_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      const currentUrl = this.page.url();
+      if (/edenred\.io\/web\/session\/step\/otp/i.test(currentUrl)) {
+        throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+      }
+
       if (await this.page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false)) {
         throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
       }
 
       if (await this.page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
+        throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+      }
+
+      const bodyText = await this.page.locator("body").innerText().catch(() => "");
+      if (/c.digo de verifica..o|receber c.digo por e-mail|solicitar novo c.digo/i.test(bodyText)) {
         throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
       }
 

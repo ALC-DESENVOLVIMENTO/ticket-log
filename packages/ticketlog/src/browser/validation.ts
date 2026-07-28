@@ -456,11 +456,21 @@ async function waitForPlateSearchResult(page: Page, plate: string): Promise<void
 async function waitForVehicleListReady(page: Page, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const currentUrl = page.url();
+    if (/edenred\.io\/web\/session\/step\/otp/i.test(currentUrl)) {
+      throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+    }
+
     if (await isVisible(page.getByLabel(/usu.rio|e-mail|email|login/i))) {
       throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
     }
 
     if (await isVisible(page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first())) {
+      throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
+    }
+
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+    if (/c.digo de verifica..o|receber c.digo por e-mail|solicitar novo c.digo/i.test(bodyText)) {
       throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
     }
 
