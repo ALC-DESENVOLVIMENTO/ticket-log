@@ -90,6 +90,10 @@ export class FleetVehiclePage {
 
     await formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first().click();
 
+    const confirmButton = formFrame.locator("button.swal2-confirm").first();
+    await expect(confirmButton).toBeVisible({ timeout: 10_000 });
+    await confirmButton.click();
+
     const confirmation = await this.waitForLimitChangeConfirmation();
     if (!confirmation) {
       throw new IndeterminateResultError("CHANGE_LIMIT_CONFIRMATION_NOT_FOUND");
