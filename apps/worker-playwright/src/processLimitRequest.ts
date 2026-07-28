@@ -17,12 +17,20 @@ import { createTicketLogProvider } from "@ticketlog/ticketlog";
 
 type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
 
-export async function processLimitRequest(requestId: string): Promise<void> {
+interface ProcessLimitRequestOptions {
+  allowManualStart?: boolean;
+}
+
+export async function processLimitRequest(requestId: string, options: ProcessLimitRequestOptions = {}): Promise<void> {
   console.info({ requestId }, "processLimitRequest:start");
   const request = await getRequest(requestId);
   if (!request) throw new Error("REQUEST_NOT_FOUND");
 
-  if (!["NA_FILA", "FALHA_REPROCESSAVEL"].includes(request.status)) {
+  const allowedStatuses = options.allowManualStart
+    ? ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"]
+    : ["NA_FILA", "FALHA_REPROCESSAVEL"];
+
+  if (!allowedStatuses.includes(request.status)) {
     await appendAuditEvent({
       requestId,
       eventType: "JOB_IGNORED_INVALID_STATE",
@@ -42,6 +50,14 @@ export async function processLimitRequest(requestId: string): Promise<void> {
     if (request.status === "FALHA_REPROCESSAVEL") {
       await transitionRequest(requestId, "NA_FILA");
     }
+    if (request.status === "FALHA_MANUAL" && options.allowManualStart) {
+      await appendAuditEvent({
+        requestId,
+        eventType: "MANUAL_PROCESSING_STARTED",
+        payload: { previousStatus: request.status },
+      });
+      await transitionRequest(requestId, "NA_FILA");
+    }
     await transitionRequest(requestId, "EM_PROCESSAMENTO");
     console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
     const provider = createTicketLogProvider();
@@ -50,6 +66,7 @@ export async function processLimitRequest(requestId: string): Promise<void> {
     if (limitAlreadyChanged) {
       currentStep = "EVA_RELEASE";
       console.info({ requestId }, "processLimitRequest:change-limit-already-done");
+      await transitionRequest(requestId, "LIMITE_ALTERADO");
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
       await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
@@ -133,7 +150,11 @@ async function classifyFailure(requestId: string, error: unknown, stepKey: Autom
     return true;
   }
 
-  await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: "UNEXPECTED_ERROR" });
+  const unexpectedErrorCode =
+    error instanceof Error && error.message
+      ? `UNEXPECTED_ERROR:${error.message.slice(0, 180)}`
+      : "UNEXPECTED_ERROR";
+  await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: unexpectedErrorCode });
   await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
   return true;
 }

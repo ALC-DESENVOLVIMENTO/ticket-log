@@ -400,6 +400,122 @@ pre {
   padding: 12px;
 }
 
+.detail-card {
+  gap: 14px;
+}
+
+.detail-headline {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 10px 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.status-pill {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.status-pill.success {
+  background: #e7f8eb;
+  color: #146c2e;
+}
+
+.status-pill.processing {
+  background: #eef4ff;
+  color: #184ea3;
+}
+
+.status-pill.warning {
+  background: #fff6e6;
+  color: #915f00;
+}
+
+.status-pill.danger {
+  background: #fff0f0;
+  color: #a01e1e;
+}
+
+.status-pill.neutral {
+  background: #eef0f3;
+  color: #4f5864;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.muted-line {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+}
+
+.timeline-block {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline-block h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.timeline-list {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-row {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(140px, 180px) auto 1fr;
+  padding: 10px 12px;
+}
+
+.request-row-button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.request-row-button:hover .request-row {
+  border-color: rgba(230, 0, 0, 0.35);
+  box-shadow: 0 8px 18px rgba(17, 17, 17, 0.05);
+}
+
+.request-row {
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.subtle-block {
+  background: white;
+}
+
+.operations-grid {
+  grid-template-columns: minmax(320px, 1.1fr) minmax(320px, 0.9fr);
+}
+
 .result a {
   color: var(--ticket-blue);
   font-weight: 650;
@@ -443,5 +559,16 @@ pre {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-grid,
+  .timeline-row,
+  .operations-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-headline {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

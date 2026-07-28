@@ -5,7 +5,9 @@ import {
   Clock,
   History,
   LogOut,
+  RefreshCw,
   ShieldCheck,
+  TerminalSquare,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -16,11 +18,14 @@ import {
   getApproval,
   getMe,
   getPublicConfig,
-  getRequest,
+  getRequestDetails,
   getSessionToken,
+  getTicketLogSessionStatus,
+  listRequests,
   listUsers,
   login,
   logout,
+  retryRequest,
   secondApprove,
   setSessionToken,
   setupMfa,
@@ -28,7 +33,7 @@ import {
 } from "./api";
 import "./styles.css";
 
-type AppView = "request" | "history" | "users";
+type AppView = "request" | "history" | "operations" | "users";
 
 function BrandLockup({ compact = false }: { compact?: boolean }) {
   return (
@@ -60,6 +65,28 @@ function money(value: unknown) {
 
 function ErrorBox({ error }: { error: string }) {
   return error ? <pre className="error">{error}</pre> : null;
+}
+
+function statusTone(status: string | undefined) {
+  switch (status) {
+    case "CONCLUIDA":
+    case "EVA_LIBERADA":
+      return "success";
+    case "EM_PROCESSAMENTO":
+    case "NA_FILA":
+    case "LIMITE_ALTERADO":
+      return "processing";
+    case "FALHA_MANUAL":
+    case "FALHA_REPROCESSAVEL":
+    case "RESULTADO_INDETERMINADO":
+      return "warning";
+    case "REJEITADA":
+    case "CANCELADA":
+    case "EXPIRADA":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 function LoginView({ onLoggedIn }: { onLoggedIn: (requiresMfaSetup: boolean) => void }) {
@@ -312,11 +339,12 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
   const [lookup, setLookup] = useState<any>(null);
   const [lookupError, setLookupError] = useState("");
   const [secondApprovalStatus, setSecondApprovalStatus] = useState("");
+  const [retryStatus, setRetryStatus] = useState("");
 
   useEffect(() => {
     if (!initialLookupId) return;
     setLookupId(initialLookupId);
-    getRequest(initialLookupId)
+    getRequestDetails(initialLookupId)
       .then((result) => {
         setLookup(result);
         setLookupError("");
@@ -328,6 +356,7 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
     setLookupError("");
     setLookup(null);
     setSecondApprovalStatus("");
+    setRetryStatus("");
 
     if (!lookupId.trim()) {
       setLookupError("INFORME_O_ID_DA_SOLICITACAO");
@@ -335,7 +364,7 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
     }
 
     try {
-      setLookup(await getRequest(lookupId));
+      setLookup(await getRequestDetails(lookupId));
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : "REQUEST_LOOKUP_FAILED");
     }
@@ -344,12 +373,16 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
   useEffect(() => {
     if (!lookupId.trim()) return;
     if (!lookup) return;
-    if (["CONCLUIDA", "REJEITADA", "EXPIRADA", "CANCELADA", "FALHA_MANUAL", "RESULTADO_INDETERMINADO"].includes(lookup.status)) {
+    if (
+      ["CONCLUIDA", "REJEITADA", "EXPIRADA", "CANCELADA", "FALHA_MANUAL", "RESULTADO_INDETERMINADO"].includes(
+        lookup.request?.status ?? lookup.status,
+      )
+    ) {
       return;
     }
 
     const timer = window.setInterval(() => {
-      getRequest(lookupId)
+      getRequestDetails(lookupId)
         .then(setLookup)
         .catch((err) => setLookupError(err instanceof Error ? err.message : "REQUEST_LOOKUP_FAILED"));
     }, 5000);
@@ -360,13 +393,29 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
   async function approveSecond() {
     setLookupError("");
     try {
-      const result = await secondApprove(lookup.id);
+      const result = await secondApprove(lookup.request.id);
       setSecondApprovalStatus(JSON.stringify(result));
-      setLookup(await getRequest(lookup.id));
+      setLookup(await getRequestDetails(lookup.request.id));
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : "SECOND_APPROVAL_FAILED");
     }
   }
+
+  async function retryCurrentRequest() {
+    setLookupError("");
+    try {
+      const result = await retryRequest(lookup.request.id);
+      setRetryStatus(JSON.stringify(result));
+      setLookup(await getRequestDetails(lookup.request.id));
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : "REQUEST_RETRY_FAILED");
+    }
+  }
+
+  const request = lookup?.request ?? lookup;
+  const steps = lookup?.steps ?? [];
+  const events = lookup?.events ?? [];
+  const retryableStatuses = ["FALHA_REPROCESSAVEL", "FALHA_MANUAL"];
 
   return (
     <section className="panel">
@@ -379,21 +428,202 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
         <button type="button" onClick={search}>Buscar</button>
       </div>
       {lookup && (
-        <div className="result">
-          <strong>{lookup.vehicle_plate} - {money(lookup.requested_amount)}</strong>
-          <span>Status: {lookup.status}</span>
-          <span>Grupo: {lookup.vehicle_group}</span>
-          {lookup.status === "AGUARDANDO_SEGUNDA_APROVACAO" && (
-            <button type="button" onClick={approveSecond}>
-              <ShieldCheck size={18} />
-              Fazer segunda aprovacao
-            </button>
-          )}
+        <div className="result detail-card">
+          <div className="detail-headline">
+            <div>
+              <strong>{request.vehicle_plate} - {money(request.requested_amount)}</strong>
+              <span className="muted-line">ID: {request.id}</span>
+            </div>
+            <span className={`status-pill ${statusTone(request.status)}`}>{request.status}</span>
+          </div>
+          <div className="detail-grid">
+            <span>Grupo: {request.vehicle_group}</span>
+            <span>Canal: {request.channel}</span>
+            <span>Limite anterior: {request.previous_limit ? money(request.previous_limit) : "n/d"}</span>
+            <span>Novo limite: {request.new_limit ? money(request.new_limit) : "n/d"}</span>
+            <span>Resultado plataforma: {request.platform_result ?? "aguardando"}</span>
+            <span>Criado em: {request.created_at ? new Date(request.created_at).toLocaleString("pt-BR") : "n/d"}</span>
+          </div>
+          <div className="action-row">
+            {request.status === "AGUARDANDO_SEGUNDA_APROVACAO" && (
+              <button type="button" onClick={approveSecond}>
+                <ShieldCheck size={18} />
+                Fazer segunda aprovacao
+              </button>
+            )}
+            {retryableStatuses.includes(request.status) && (
+              <button type="button" className="secondary" onClick={retryCurrentRequest}>
+                <RefreshCw size={18} />
+                Reprocessar
+              </button>
+            )}
+          </div>
           {secondApprovalStatus && <code>{secondApprovalStatus}</code>}
+          {retryStatus && <code>{retryStatus}</code>}
+
+          {steps.length > 0 && (
+            <div className="timeline-block">
+              <h3>Etapas da automacao</h3>
+              <div className="timeline-list">
+                {steps.map((step: any) => (
+                  <div key={step.step_key} className="timeline-row">
+                    <strong>{step.step_key}</strong>
+                    <span className={`status-pill ${statusTone(step.status)}`}>{step.status}</span>
+                    <span>{step.error_code ?? "sem erro"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {events.length > 0 && (
+            <div className="timeline-block">
+              <h3>Auditoria recente</h3>
+              <div className="timeline-list">
+                {events.map((event: any, index: number) => (
+                  <div key={`${event.event_type}-${index}`} className="timeline-row">
+                    <strong>{event.event_type}</strong>
+                    <span>{new Date(event.created_at).toLocaleString("pt-BR")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       <ErrorBox error={lookupError} />
     </section>
+  );
+}
+
+function HistoryPanel({ onSelectRequest }: { onSelectRequest: (requestId: string) => void }) {
+  const [requests, setRequests] = useState<any[]>([]);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    try {
+      const result = await listRequests(25);
+      setRequests(result.requests ?? []);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "REQUEST_HISTORY_LOAD_FAILED");
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <section className="panel">
+      <div className="panel-title">
+        <h2>Historico recente</h2>
+        <span>Ultimas 25 solicitacoes</span>
+      </div>
+      <div className="action-row">
+        <button type="button" className="secondary" onClick={refresh}>
+          <RefreshCw size={18} />
+          Atualizar lista
+        </button>
+      </div>
+      <div className="table">
+        {requests.map((request) => (
+          <button key={request.id} type="button" className="request-row-button" onClick={() => onSelectRequest(request.id)}>
+            <div className="row request-row">
+              <div className="detail-headline">
+                <strong>{request.vehicle_plate} - {money(request.requested_amount)}</strong>
+                <span className={`status-pill ${statusTone(request.status)}`}>{request.status}</span>
+              </div>
+              <span className="muted-line">ID: {request.id}</span>
+              <span>{request.vehicle_group}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <ErrorBox error={error} />
+    </section>
+  );
+}
+
+function OperationsPanel() {
+  const [session, setSession] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    try {
+      setSession(await getTicketLogSessionStatus());
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "TICKETLOG_SESSION_STATUS_FAILED");
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <div className="grid operations-grid">
+      <section className="panel">
+        <div className="panel-title">
+          <h2>Sessao operacional Ticket Log</h2>
+          <span>Modo assistido</span>
+        </div>
+        {session && (
+          <div className="result detail-card">
+            <div className="detail-grid">
+              <span>Provider: {session.providerMode}</span>
+              <span>Execucao real: {session.realExecutionEnabled ? "ativa" : "desligada"}</span>
+              <span>Login manual: {session.allowManualLogin ? "habilitado" : "desabilitado"}</span>
+              <span>Perfil persistente: {session.userDataDirPresent ? "presente" : "nao detectado"}</span>
+              <span>Storage state: {session.sessionStoragePresent ? "presente" : "nao detectado"}</span>
+              <span>Embed Ticket Log: {session.canEmbedTicketLog ? "suportado" : "bloqueado"}</span>
+            </div>
+            <div className="hint">
+              {session.operatorGuidance}
+            </div>
+            {!session.canEmbedTicketLog && (
+              <div className="result subtle-block">
+                <strong>Por que nao mostramos a Ticket Log dentro deste painel?</strong>
+                <span>{session.embedBlockedReason}</span>
+              </div>
+            )}
+            <div className="action-row">
+              <button type="button" className="secondary" onClick={refresh}>
+                <RefreshCw size={18} />
+                Atualizar estado
+              </button>
+            </div>
+          </div>
+        )}
+        <ErrorBox error={error} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-title">
+          <h2>Fluxo do operador</h2>
+          <span>Quando houver desafio</span>
+        </div>
+        <div className="timeline-list">
+          <div className="timeline-row">
+            <strong>1. Solicitação entra na fila</strong>
+            <span>O backend tenta usar a sessao reaproveitada da Ticket Log.</span>
+          </div>
+          <div className="timeline-row">
+            <strong>2. Edenred pede desafio</strong>
+            <span>Captcha, SMS, trusted device ou OTP interrompem a execucao automatica.</span>
+          </div>
+          <div className="timeline-row">
+            <strong>3. Operador autorizado assume</strong>
+            <span>Dev, aprovador ou Luka concluem o login na estacao operacional e a automacao segue.</span>
+          </div>
+          <div className="timeline-row">
+            <strong>4. Fluxo retoma do ponto seguro</strong>
+            <span>Se o limite ja mudou, o sistema pula direto para EVA; se nao, continua da alteracao.</span>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -475,6 +705,7 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
         <nav>
           <button className={view === "request" ? "active" : ""} onClick={() => setView("request")}><Clock size={16} /> Solicitacao</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><History size={16} /> Historico</button>
+          <button className={view === "operations" ? "active" : ""} onClick={() => setView("operations")}><TerminalSquare size={16} /> Operacao</button>
           <button className={view === "users" ? "active" : ""} onClick={() => setView("users")}><Users size={16} /> Usuarios</button>
         </nav>
         <IntegrationBadge />
@@ -495,7 +726,13 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
             <StatusPanel initialLookupId={activeRequestId} />
           </div>
         )}
-        {view === "history" && <StatusPanel initialLookupId={activeRequestId} />}
+        {view === "history" && (
+          <div className="grid">
+            <HistoryPanel onSelectRequest={setActiveRequestId} />
+            <StatusPanel initialLookupId={activeRequestId} />
+          </div>
+        )}
+        {view === "operations" && <OperationsPanel />}
         {view === "users" && <UsersPanel />}
       </section>
     </main>

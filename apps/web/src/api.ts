@@ -120,6 +120,18 @@ export async function getRequest(id: string) {
   });
 }
 
+export async function getRequestDetails(id: string) {
+  return jsonFetch(`/requests/${id}/details`, {
+    headers: devHeaders(),
+  });
+}
+
+export async function listRequests(limit = 20) {
+  return jsonFetch(`/requests?limit=${limit}`, {
+    headers: devHeaders(),
+  });
+}
+
 export async function approveToken(token: string) {
   return jsonFetch(`/approval/${token}/approve`, {
     method: "POST",
@@ -134,6 +146,19 @@ export async function getApproval(token: string) {
 export async function secondApprove(requestId: string) {
   return jsonFetch(`/requests/${requestId}/second-approval`, {
     method: "POST",
+    headers: devHeaders(),
+  });
+}
+
+export async function retryRequest(requestId: string) {
+  return jsonFetch(`/requests/${requestId}/retry`, {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}
+
+export async function getTicketLogSessionStatus() {
+  return jsonFetch("/operations/ticketlog/session", {
     headers: devHeaders(),
   });
 }

@@ -11,6 +11,7 @@ import {
 import {
   createApprovalToken,
   createRequest,
+  getPool,
   getRequest,
   transitionRequest,
 } from "@ticketlog/db";
@@ -34,6 +35,14 @@ function currentBucket(): string {
 }
 
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/requests", async (request) => {
+    await getAuthenticatedUser(request);
+    const query = request.query as { limit?: string };
+    const limit = Math.max(1, Math.min(query.limit ? Number(query.limit) : 20, 100));
+    const result = await getPool().query("select * from requests order by created_at desc limit $1", [limit]);
+    return { requests: result.rows };
+  });
+
   app.post("/requests", async (request, reply) => {
     const user = await getAuthenticatedUser(request);
     const body = request.body as any;
@@ -89,6 +98,33 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const found = await getRequest(params.id);
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     return found;
+  });
+
+  app.get("/requests/:id/details", async (request, reply) => {
+    await getAuthenticatedUser(request);
+    const params = request.params as { id: string };
+    const found = await getRequest(params.id);
+    if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
+    const [stepsResult, eventsResult] = await Promise.all([
+      getPool().query(
+        `select step_key, status, error_code, started_at, finished_at
+           from automation_steps
+          where request_id = $1
+          order by started_at nulls first, step_key`,
+        [params.id],
+      ),
+      getPool().query(
+        `select event_type, created_at
+           from audit_events
+          where request_id = $1
+          order by created_at desc
+          limit 30`,
+        [params.id],
+      ),
+    ]);
+    const steps = stepsResult.rows;
+    const events = eventsResult.rows;
+    return { request: found, steps, events };
   });
 
   app.post("/requests/:id/retry", async (request, reply) => {

@@ -209,7 +209,8 @@ export class FleetVehiclePage {
 
   private async waitForLimitChangeConfirmation(): Promise<string | null> {
     const deadline = Date.now() + 60_000;
-    const successPattern = /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]/i;
+    const successPattern =
+      /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar/i;
 
     while (Date.now() < deadline) {
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -218,6 +219,17 @@ export class FleetVehiclePage {
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
         const match = bodyText.match(successPattern);
         if (match) return bodyText.slice(0, 500);
+      }
+
+      const formStillOpen = await this.waitForChangeLimitFrame(1_000);
+      if (!formStillOpen) {
+        const detailsVisible = await this.page.getByText(/detalhes do ve.culo/i).first().isVisible().catch(() => false);
+        const limitVisible = await this.page.getByText(/limite atual|limite total/i).first().isVisible().catch(() => false);
+        const changeCardVisible = await this.page.getByText(/^\s*alterar\s+limite\s*$/i).first().isVisible().catch(() => false);
+
+        if (detailsVisible && (limitVisible || changeCardVisible)) {
+          return "ALTERACAO_SUBMETIDA_SEM_BANNER_EXPLICITO";
+        }
       }
 
       await this.page.waitForTimeout(1_000);

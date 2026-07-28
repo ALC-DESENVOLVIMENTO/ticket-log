@@ -28,6 +28,19 @@ export interface DbRequest {
   new_limit: string | null;
 }
 
+export interface DbAutomationStep {
+  step_key: string;
+  status: string;
+  error_code: string | null;
+  started_at: Date | null;
+  finished_at: Date | null;
+}
+
+export interface DbAuditEventSummary {
+  event_type: string;
+  created_at: Date;
+}
+
 export async function findUserByPhone(phoneE164: string): Promise<DbUser | null> {
   const result = await getPool().query<DbUser>(
     `select u.*
@@ -285,6 +298,39 @@ export async function recordApproval(input: {
 export async function getRequest(id: string): Promise<DbRequest | null> {
   const result = await getPool().query<DbRequest>("select * from requests where id = $1", [id]);
   return result.rows[0] ?? null;
+}
+
+export async function listRecentRequests(limit = 20): Promise<DbRequest[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, 100));
+  const result = await getPool().query<DbRequest>(
+    "select * from requests order by created_at desc limit $1",
+    [boundedLimit],
+  );
+  return result.rows;
+}
+
+export async function listAutomationSteps(requestId: string): Promise<DbAutomationStep[]> {
+  const result = await getPool().query<DbAutomationStep>(
+    `select step_key, status, error_code, started_at, finished_at
+       from automation_steps
+      where request_id = $1
+      order by started_at nulls first, step_key`,
+    [requestId],
+  );
+  return result.rows;
+}
+
+export async function listAuditEventSummaries(requestId: string, limit = 20): Promise<DbAuditEventSummary[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, 100));
+  const result = await getPool().query<DbAuditEventSummary>(
+    `select event_type, created_at
+       from audit_events
+      where request_id = $1
+      order by created_at desc
+      limit $2`,
+    [requestId, boundedLimit],
+  );
+  return result.rows;
 }
 
 export async function transitionRequest(id: string, to: RequestState, actorUserId?: string): Promise<DbRequest> {

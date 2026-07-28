@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { normalizePlate, ManualInterventionError } from "@ticketlog/domain";
+import { IndeterminateResultError, normalizePlate, ManualInterventionError } from "@ticketlog/domain";
 import type { TicketLogLimitInput, TicketLogLimitResult, TicketLogProvider } from "../provider.js";
 import { EvaPage } from "./pages/EvaPage.js";
 import { FleetVehiclePage } from "./pages/FleetVehiclePage.js";
@@ -48,13 +48,42 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
       const previousLimit = await fleet.readCurrentLimit();
       console.info({ requestId: input.requestId, previousLimit }, "ticketlog.changeLimit:previous-limit");
-      const platformResult = await fleet.addTemporaryLimit({
-        plate: input.vehiclePlate,
-        amount: input.requestedAmount,
-        reason: ".",
-      });
+      let platformResult: string;
+      let newLimit: number | null = null;
+
+      try {
+        platformResult = await fleet.addTemporaryLimit({
+          plate: input.vehiclePlate,
+          amount: input.requestedAmount,
+          reason: ".",
+        });
+      } catch (error) {
+        if (!(error instanceof IndeterminateResultError)) throw error;
+
+        newLimit = await fleet.readCurrentLimit();
+        const expectedLimit =
+          previousLimit !== null ? Number((previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
+        const deltaMatches =
+          previousLimit !== null &&
+          newLimit !== null &&
+          Math.abs((newLimit - previousLimit) - Number(input.requestedAmount)) < 0.01;
+        const expectedMatches = expectedLimit !== null && newLimit !== null && Math.abs(newLimit - expectedLimit) < 0.01;
+
+        if (!deltaMatches && !expectedMatches) {
+          throw error;
+        }
+
+        platformResult = "ALTERACAO_CONFIRMADA_POR_LEITURA_DO_LIMITE";
+        console.warn(
+          { requestId: input.requestId, previousLimit, newLimit, expectedLimit, originalError: error.message },
+          "ticketlog.changeLimit:confirmation-recovered-from-limit-read",
+        );
+      }
+
       console.info({ requestId: input.requestId, platformResult }, "ticketlog.changeLimit:limit-changed");
-      const newLimit = await fleet.readCurrentLimit();
+      if (newLimit === null) {
+        newLimit = await fleet.readCurrentLimit();
+      }
       console.info({ requestId: input.requestId, newLimit }, "ticketlog.changeLimit:new-limit");
 
       await this.saveStorageState(context);
@@ -138,9 +167,18 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
   private async ensureAuthenticated(page: Page): Promise<void> {
     const loginUrl = process.env.TICKETLOG_LOGIN_URL;
-    if (!loginUrl) return;
+    const allowManualLogin = process.env.TICKETLOG_ALLOW_MANUAL_LOGIN === "true";
+    const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
+    const targetUrl = loginUrl ?? homeUrl;
 
-    await page.goto(loginUrl);
+    await page.goto(targetUrl);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+    if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
+      await this.waitForManualLogin(page);
+      return;
+    }
+
     if (await page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
       throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
     }
@@ -153,6 +191,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const passwordFieldVisible = await passwordField.isVisible().catch(() => false);
 
     if ((userFieldVisible || passwordFieldVisible) && (!username || !password)) {
+      if (allowManualLogin) {
+        await this.waitForManualLogin(page);
+        return;
+      }
       throw new ManualInterventionError("TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN");
     }
 
@@ -164,6 +206,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await page.getByRole("button", { name: /entrar|acessar|login/i }).click();
       await page.goto(process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list");
       await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
+        await this.waitForManualLogin(page);
+        return;
+      }
       if (await page.getByText(/captcha|mfa|autenticador|token|c.digo/i).first().isVisible().catch(() => false)) {
         throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
       }
@@ -174,6 +220,68 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     if (loginFieldStillVisible || passwordFieldStillVisible) {
       throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
     }
+  }
+
+  private async requiresHumanChallenge(page: Page): Promise<boolean> {
+    const url = page.url();
+    if (/edenred\.io\/web\/session\/step\/otp/i.test(url)) return true;
+
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+    return /c.digo de verifica..o|receber c.digo por e-mail|solicitar novo c.digo|captcha|autenticador|mfa/i.test(
+      bodyText,
+    );
+  }
+
+  private async waitForManualLogin(page: Page): Promise<void> {
+    const vehicleListUrl = process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list";
+    const timeoutMs = Number(process.env.TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS ?? 15 * 60_000);
+
+    console.error(
+      "TICKETLOG_ALLOW_MANUAL_LOGIN=true: conclua login, OTP/SMS/MFA/reCAPTCHA no navegador aberto; depois pressione Enter no terminal quando estiver realmente dentro da Ticket Log.",
+    );
+
+    if (process.env.TICKETLOG_MANUAL_LOGIN_CONTINUE !== "auto" && process.stdin.isTTY) {
+      await waitForEnter("Pressione Enter apos concluir login/codigo no navegador...");
+    } else {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (page.isClosed()) {
+          throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+        }
+
+        const loginFieldStillVisible = await page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false);
+        const passwordFieldStillVisible = await page.getByLabel(/senha/i).first().isVisible().catch(() => false);
+        const challengeStillVisible = await this.requiresHumanChallenge(page);
+        const platformShellVisible = await page.getByText(/in.cio|acesso r.pido|sou log|ticket log|ve.culos|placa/i).first().isVisible().catch(() => false);
+
+        if (!loginFieldStillVisible && !passwordFieldStillVisible && !challengeStillVisible && platformShellVisible) {
+          break;
+        }
+
+        await page.waitForTimeout(1500);
+      }
+    }
+
+    if (page.isClosed()) {
+      throw new ManualInterventionError("BROWSER_CLOSED_DURING_MANUAL_LOGIN");
+    }
+
+    const loginFieldStillVisible = await page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false);
+    const passwordFieldStillVisible = await page.getByLabel(/senha/i).first().isVisible().catch(() => false);
+    const challengeStillVisible = await this.requiresHumanChallenge(page);
+    const platformShellVisible = await page
+      .getByText(/in.cio|acesso r.pido|sou log|ticket log|ve.culos|placa|cadastros/i)
+      .first()
+      .isVisible()
+      .catch(() => false);
+
+    if (loginFieldStillVisible || passwordFieldStillVisible || challengeStillVisible || !platformShellVisible) {
+      throw new ManualInterventionError("MANUAL_LOGIN_NOT_CONFIRMED");
+    }
+
+    await this.saveStorageState(page.context());
+    await page.goto(vehicleListUrl);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
   private assertRealExecutionAllowed(input: TicketLogLimitInput): void {
@@ -222,4 +330,15 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
         .map((plate) => normalizePlate(plate)),
     );
   }
+}
+
+async function waitForEnter(message: string): Promise<void> {
+  console.error(message);
+  process.stdin.resume();
+  await new Promise<void>((resolve) => {
+    process.stdin.once("data", () => {
+      process.stdin.pause();
+      resolve();
+    });
+  });
 }
