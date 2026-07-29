@@ -1,5 +1,6 @@
 import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { formatCurrencyInput, IndeterminateResultError, ManualInterventionError, normalizePlate } from "@ticketlog/domain";
+import { ticketLogUi } from "../uiMap.js";
 
 export interface LimitChangeConfirmation {
   platformResult: string;
@@ -523,19 +524,30 @@ export class FleetVehiclePage {
   }
 
   private async clickHomeEntrypoint(timeoutMs = 20_000): Promise<void> {
-    const homeEntry = await this.findVisible(
-      [
-        this.page.getByRole("link", { name: /^\s*(?:in.cio|home)\s*$/i }).first(),
-        this.page.getByRole("button", { name: /^\s*(?:in.cio|home)\s*$/i }).first(),
-        this.page.getByText(/^\s*(?:in.cio|home)\s*$/i).first(),
-        this.page.locator("a[href$='/home'], a[href*='/home?']").first(),
-      ],
-      "HOME_ENTRYPOINT_NOT_FOUND",
-      timeoutMs,
-    );
+    const deadline = Date.now() + timeoutMs;
+    do {
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const candidates = [
+          scope.getByRole("link", { name: ticketLogUi.home.labels }).first(),
+          scope.getByRole("button", { name: ticketLogUi.home.labels }).first(),
+          scope.getByText(ticketLogUi.home.labels).first(),
+          ...ticketLogUi.home.selectors.map((selector) =>
+            scope.locator(selector).first(),
+          ),
+        ];
 
-    await this.clickEntrypointCard(homeEntry, "HOME_ENTRYPOINT_NOT_CLICKABLE");
-    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+        for (const candidate of candidates) {
+          if (!(await candidate.isVisible().catch(() => false))) continue;
+          await this.clickEntrypointCard(candidate, "HOME_ENTRYPOINT_NOT_CLICKABLE");
+          await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+          return;
+        }
+      }
+
+      if (Date.now() < deadline) await this.page.waitForTimeout(250);
+    } while (Date.now() < deadline);
+
+    throw new ManualInterventionError("HOME_ENTRYPOINT_NOT_FOUND");
   }
 
   private async waitForHomeReady(timeoutMs = 20_000): Promise<boolean> {
@@ -565,10 +577,10 @@ export class FleetVehiclePage {
       .locator("xpath=following::*[1]");
     const entrypoint = await this.findVisible(
       [
-        quickAccess.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
-        this.page.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
-        this.page.getByRole("link", { name: /^\s*(?:ve.culo|vehicle)\s*$/i }).first(),
-        this.page.getByRole("button", { name: /^\s*(?:ve.culo|vehicle)\s*$/i }).first(),
+        quickAccess.getByText(ticketLogUi.vehicleQuickAccess.labels).first(),
+        this.page.getByText(ticketLogUi.vehicleQuickAccess.labels).first(),
+        this.page.getByRole("link", { name: ticketLogUi.vehicleQuickAccess.labels }).first(),
+        this.page.getByRole("button", { name: ticketLogUi.vehicleQuickAccess.labels }).first(),
       ],
       "VEHICLE_LIST_ENTRYPOINT_NOT_FOUND",
       timeoutMs,

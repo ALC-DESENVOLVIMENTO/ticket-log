@@ -13,6 +13,7 @@
     "build:web": "npm run build -w @ticketlog/web",
     "provision:whatsapp-user": "node scripts/provision-whatsapp-user.mjs",
     "test:api": "npm run test -w @ticketlog/api",
+    "test:ticketlog": "npm run test -w @ticketlog/ticketlog",
     "typecheck": "npm run typecheck -w @ticketlog/domain && npm run typecheck -w @ticketlog/db && npm run typecheck -w @ticketlog/queue && npm run typecheck -w @ticketlog/whatsapp && npm run typecheck -w @ticketlog/ticketlog && npm run typecheck -w @ticketlog/api && npm run typecheck -w @ticketlog/worker-playwright && npm run typecheck -w @ticketlog/web",
     "dev:api": "npm run dev -w @ticketlog/api",
     "dev:worker": "npm run dev -w @ticketlog/worker-playwright",

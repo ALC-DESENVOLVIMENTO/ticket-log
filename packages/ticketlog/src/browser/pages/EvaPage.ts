@@ -1,51 +1,65 @@
 import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { ManualInterventionError, normalizePlate } from "@ticketlog/domain";
+import {
+  isEvaFrameCandidate,
+  isEvaReleaseConfirmation,
+  ticketLogUi,
+} from "../uiMap.js";
 
 export class EvaPage {
   constructor(private readonly page: Page) {}
 
+  async isAvailable(timeoutMs = 2_500): Promise<boolean> {
+    if (await this.getEvaFrame(250)) return true;
+    return (await this.findEvaLauncher(timeoutMs)) !== null;
+  }
+
   async open(): Promise<void> {
-    if (await this.getEvaFrame(1_000)) return;
+    if (await this.getEvaFrame(500)) return;
 
-    const evaButton = await this.waitForVisible(
-      [
-        this.page.locator("#ge-fab, #gea-fab, #movebutton, #buttoneva").first(),
-        this.page.locator("button.eva-button, button[aria-label='EVA']").first(),
-        this.page.getByRole("button", { name: /eva|assistente virtual/i }).first(),
-        this.page.locator("img#fotoeva, img[src*='eva' i], img[alt*='eva' i]").first(),
-      ],
-      30_000,
-    ).catch(() => null);
-
+    const evaButton = await this.findEvaLauncher(8_000);
     if (!evaButton) {
       throw new ManualInterventionError("EVA_BUTTON_NOT_FOUND");
     }
 
     await evaButton.click({ force: true });
-    if (!(await this.getEvaFrame())) {
+    console.info("ticketlog.eva:launcher-clicked");
+    if (await this.getEvaFrame(5_000)) return;
+
+    // Some legacy pages bind the chat opening action to a double click.
+    await evaButton.dblclick({ force: true }).catch(() => undefined);
+    if (!(await this.getEvaFrame(8_000))) {
       throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
     }
   }
 
   async releaseFuelRestriction(plate: string): Promise<void> {
     const frame = await this.openReleaseFuelRestrictionFlow();
-    const textbox = await this.findVisible([
-      frame.getByRole("textbox").last(),
-      frame.locator("textarea:visible").last(),
-      frame.locator("input:visible").last(),
-    ]);
+    const textbox = await this.waitForVisible(
+      [
+        frame.getByRole("textbox").last(),
+        frame.locator("textarea:visible").last(),
+        frame.locator("input:visible").last(),
+      ],
+      15_000,
+    );
 
     await textbox.fill(normalizePlate(plate));
+    console.info("ticketlog.eva:plate-filled");
 
-    await this.findVisible([
-      frame.getByRole("button", { name: /enviar|confirmar|send|confirm/i }),
-      frame.locator("button:visible").last(),
-    ]).then((locator) => locator.click());
+    await this.waitForVisible(
+      [
+        frame.getByRole("button", { name: /enviar|confirmar|send|confirm/i }),
+        frame.locator("button:visible").last(),
+      ],
+      10_000,
+    ).then((locator) => locator.click());
 
     const confirmation = await this.waitForEvaConfirmation(frame);
     if (!confirmation) {
       throw new ManualInterventionError("EVA_RELEASE_CONFIRMATION_NOT_FOUND");
     }
+    console.info("ticketlog.eva:release-confirmed");
   }
 
   async prepareFuelRestrictionDryRun(plate: string): Promise<void> {
@@ -65,8 +79,8 @@ export class EvaPage {
     await this.open();
     const frame = await this.requireEvaFrame();
 
-    await this.clickEvaOption(frame, /^(?:transa..es|transactions)/i);
-    await this.clickEvaOption(frame, /liberar abastecimento.*restri|release fuel.*restrict/i);
+    await this.clickEvaOption(frame, ticketLogUi.eva.transactions);
+    await this.clickEvaOption(frame, ticketLogUi.eva.releaseFuelRestriction);
     return frame;
   }
 
@@ -77,7 +91,8 @@ export class EvaPage {
     ]);
 
     await option.click({ force: true });
-    await this.page.waitForTimeout(1_000);
+    console.info({ option: name.source }, "ticketlog.eva:option-clicked");
+    await this.page.waitForTimeout(200);
   }
 
   private async requireEvaFrame(): Promise<Frame> {
@@ -86,31 +101,55 @@ export class EvaPage {
     return frame;
   }
 
-  private async getEvaFrame(timeoutMs = 30_000): Promise<Frame | null> {
+  private async getEvaFrame(timeoutMs = 10_000): Promise<Frame | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       for (const frame of this.page.frames()) {
         const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
-        if (frame.url().includes("eva-front.edenred.com.br")) return frame;
-        if (/sou a eva|i am eva|digite sobre o que deseja falar|type what you want|digite aqui sua d.vida|type your question/i.test(body)) return frame;
+        if (isEvaFrameCandidate(frame.url(), body)) return frame;
       }
 
-      await this.page.waitForTimeout(500);
+      await this.page.waitForTimeout(250);
     }
 
     return null;
   }
 
   private async waitForEvaConfirmation(frame: Frame): Promise<string | null> {
-    const deadline = Date.now() + 60_000;
-    const successPattern =
-      /libera..o conclu.da|abastecimento liberado|restri..o liberada|fiz a libera..o da restri|release completed|fueling released|restriction released/i;
+    const deadline = Date.now() + 45_000;
 
     while (Date.now() < deadline) {
       const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
-      if (successPattern.test(body)) return body.slice(0, 500);
-      await this.page.waitForTimeout(1_000);
+      if (isEvaReleaseConfirmation(body)) return body.slice(0, 500);
+      await this.page.waitForTimeout(500);
     }
+
+    return null;
+  }
+
+  private async findEvaLauncher(timeoutMs: number): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const candidates = [
+          ...ticketLogUi.eva.launcherSelectors.map((selector) =>
+            scope.locator(selector).first(),
+          ),
+          scope
+            .getByRole("button", { name: ticketLogUi.eva.launcherRole })
+            .first(),
+          ...ticketLogUi.eva.launcherImageSelectors.map((selector) =>
+            scope.locator(selector).first(),
+          ),
+        ];
+
+        for (const candidate of candidates) {
+          if (await candidate.isVisible().catch(() => false)) return candidate;
+        }
+      }
+
+      if (Date.now() < deadline) await this.page.waitForTimeout(250);
+    } while (Date.now() < deadline);
 
     return null;
   }

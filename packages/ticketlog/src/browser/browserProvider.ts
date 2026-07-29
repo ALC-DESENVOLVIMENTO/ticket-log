@@ -136,6 +136,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       console.info({ requestId: input.requestId, previousLimit }, "ticketlog.changeLimit:previous-limit");
       let platformResult: string;
       let newLimit: number | null = null;
+      let resultTableProvedChange = false;
 
       try {
         const confirmation = await fleet.addTemporaryLimit({
@@ -151,6 +152,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
           requestedAmount: input.requestedAmount,
           confirmation,
         });
+        resultTableProvedChange =
+          confirmation.previousLimit !== null &&
+          confirmation.addedAmount !== null &&
+          confirmation.newLimit !== null;
       } catch (error) {
         if (!(error instanceof IndeterminateResultError)) throw error;
 
@@ -181,7 +186,9 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
       console.info({ requestId: input.requestId, platformResult }, "ticketlog.changeLimit:limit-changed");
       const verifiedLimit =
-        platformResult === "ALTERACAO_CONFIRMADA_POR_LEITURA_DO_LIMITE" && newLimit !== null
+        resultTableProvedChange && newLimit !== null
+          ? newLimit
+          : platformResult === "ALTERACAO_CONFIRMADA_POR_LEITURA_DO_LIMITE" && newLimit !== null
           ? newLimit
           : await this.pollLimitAfterConfirmedSubmission({
               fleet,
@@ -196,10 +203,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
           );
         }
         newLimit = verifiedLimit;
-        platformResult =
-          platformResult === "ALTERACAO_CONFIRMADA_PELA_TELA_DE_RESULTADO"
-            ? "ALTERACAO_CONFIRMADA_PELA_TELA_E_LEITURA_DO_LIMITE"
-            : platformResult;
+        if (resultTableProvedChange) {
+          console.info(
+            { requestId: input.requestId, previousLimit, newLimit },
+            "ticketlog.changeLimit:result-table-proof-accepted",
+          );
+        } else if (platformResult === "ALTERACAO_CONFIRMADA_PELA_TELA_DE_RESULTADO") {
+          platformResult = "ALTERACAO_CONFIRMADA_PELA_TELA_E_LEITURA_DO_LIMITE";
+        }
       } else if (newLimit === null) {
         throw new IndeterminateResultError("LIMIT_READBACK_NOT_AVAILABLE_AFTER_CONFIRMATION");
       }
@@ -265,9 +276,16 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao para EVA" });
       await this.ensureAuthenticated(page);
       await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Liberando restricao pela EVA" });
-      await this.openEvaHostPage(page);
-      console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
       const eva = new EvaPage(page);
+      if (!(await eva.isAvailable())) {
+        await this.openEvaHostPage(page);
+        console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
+      } else {
+        console.info(
+          { plate: input.vehiclePlate, url: page.url() },
+          "ticketlog.releaseEva:using-current-page",
+        );
+      }
       await eva.open();
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:panel-open");
       await eva.releaseFuelRestriction(input.vehiclePlate);
