@@ -20,6 +20,18 @@ interface BrowserSession {
 
 let sharedContextPromise: Promise<BrowserContext> | undefined;
 
+function browserLaunchArgs(headless: boolean): string[] | undefined {
+  const args = [
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--disable-features=CrashRestoreBubble,InfiniteSessionRestore",
+  ];
+  if (!headless) {
+    args.push("--start-maximized");
+  }
+  return args;
+}
+
 async function launchSharedPersistentContext(): Promise<BrowserContext> {
   const userDataDir = resolveUserDataDir();
   if (!userDataDir) {
@@ -29,7 +41,7 @@ async function launchSharedPersistentContext(): Promise<BrowserContext> {
   return chromium.launchPersistentContext(userDataDir, {
     headless: process.env.TICKETLOG_HEADLESS !== "false",
     viewport: process.env.TICKETLOG_HEADLESS === "false" ? null : undefined,
-    args: process.env.TICKETLOG_HEADLESS === "false" ? ["--start-maximized"] : undefined,
+    args: browserLaunchArgs(process.env.TICKETLOG_HEADLESS !== "false"),
   });
 }
 
@@ -256,7 +268,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     return chromium.launchPersistentContext(userDataDir, {
       headless,
       viewport: headless ? undefined : null,
-      args: headless ? undefined : ["--start-maximized"],
+      args: browserLaunchArgs(headless),
     });
   }
 

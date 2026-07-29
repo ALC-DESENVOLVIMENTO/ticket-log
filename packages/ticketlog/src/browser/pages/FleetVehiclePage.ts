@@ -9,9 +9,11 @@ export class FleetVehiclePage {
     if (!url) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
     await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    await this.dismissBlockingOverlays();
     if (!(await this.waitForVehicleListReady(30_000))) {
       const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
       await this.page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await this.dismissBlockingOverlays();
       await this.clickVehicleListEntrypoint();
     }
 
@@ -21,6 +23,7 @@ export class FleetVehiclePage {
   }
 
   async searchPlate(plate: string): Promise<{ count: number; foundPlate?: string }> {
+    await this.dismissBlockingOverlays();
     const normalized = normalizePlate(plate);
     const plateSearch = await this.findVisible(
       [
@@ -49,6 +52,7 @@ export class FleetVehiclePage {
   }
 
   async openPlate(plate: string): Promise<void> {
+    await this.dismissBlockingOverlays();
     const normalized = normalizePlate(plate);
     const plateLink = await this.findVisible(
       [
@@ -71,6 +75,7 @@ export class FleetVehiclePage {
   }
 
   async unblockVehicle(): Promise<void> {
+    await this.dismissBlockingOverlays();
     await this.page.getByRole("button", { name: /desbloquear|unblock/i }).click();
     await this.page.getByRole("button", { name: /confirmar|sim|confirm|yes/i }).click();
     await expect(this.page.getByText(/desbloquead[oa].*sucesso|unblocked.*success|ativo|active/i)).toBeVisible();
@@ -87,12 +92,10 @@ export class FleetVehiclePage {
   async addTemporaryLimit(input: { plate: string; amount: number; reason: string }): Promise<string> {
     const formFrame = await this.openChangeLimitForm();
     await this.fillTemporaryLimitForm(formFrame, input);
+    await this.dismissBlockingOverlays();
 
     await formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first().click();
-
-    const confirmButton = formFrame.locator("button.swal2-confirm").first();
-    await expect(confirmButton).toBeVisible({ timeout: 10_000 });
-    await confirmButton.click();
+    await this.confirmLimitSubmission();
 
     const confirmation = await this.waitForLimitChangeConfirmation();
     if (!confirmation) {
@@ -110,6 +113,7 @@ export class FleetVehiclePage {
   }
 
   private async openChangeLimitForm(): Promise<Page | Frame> {
+    await this.dismissBlockingOverlays();
     const openedFrame = await this.waitForChangeLimitFrame(1_000);
     if (openedFrame) {
       return openedFrame;
@@ -125,6 +129,7 @@ export class FleetVehiclePage {
   }
 
   private async clickChangeLimitEntrypoint(): Promise<void> {
+    await this.dismissBlockingOverlays();
     const attempts: string[] = [];
     const direct = await this.findVisible(
       [
@@ -179,6 +184,7 @@ export class FleetVehiclePage {
     formFrame: Page | Frame,
     input: { plate: string; amount: number; reason: string },
   ): Promise<void> {
+    await this.dismissBlockingOverlays();
     const addToCurrentLimit = formFrame.locator("input[type='radio'][name='tipo'][value='AR']").first();
     if (await addToCurrentLimit.isVisible().catch(() => false)) {
       await addToCurrentLimit.check({ force: true });
@@ -262,6 +268,7 @@ export class FleetVehiclePage {
 
     while (Date.now() < deadline) {
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await this.dismissBlockingOverlays();
 
       for (const scope of [this.page, ...this.page.frames()]) {
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
@@ -327,6 +334,7 @@ export class FleetVehiclePage {
   private async waitForVehicleListReady(timeoutMs = 30_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      await this.dismissBlockingOverlays();
       const currentUrl = this.page.url();
       if (/edenred\.io\/web\/session\/step\//i.test(currentUrl)) {
         throw new ManualInterventionError("UNEXPECTED_CAPTCHA_OR_MFA");
@@ -385,6 +393,7 @@ export class FleetVehiclePage {
   private async clickAndConfirmChangeLimit(locator: Locator): Promise<boolean> {
     if (!(await locator.isVisible().catch(() => false))) return false;
 
+    await this.dismissBlockingOverlays();
     await locator.click().catch(() => undefined);
     await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
 
@@ -420,6 +429,7 @@ export class FleetVehiclePage {
     });
 
     for (const center of centers) {
+      await this.dismissBlockingOverlays();
       await this.page.mouse.click(center.x, center.y);
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
       if (await this.waitForChangeLimitForm()) return true;
@@ -436,6 +446,7 @@ export class FleetVehiclePage {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await this.dismissBlockingOverlays();
 
       for (const scope of [this.page, ...this.page.frames()]) {
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
@@ -459,5 +470,86 @@ export class FleetVehiclePage {
     }
 
     return null;
+  }
+
+  private async confirmLimitSubmission(): Promise<void> {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      await this.dismissBlockingOverlays();
+
+      const candidates: Locator[] = [
+        this.page.locator("button.swal2-confirm, input.swal2-confirm").first(),
+        this.page.getByRole("button", { name: /confirmar|sim|alterar|ok/i }).first(),
+        this.page.locator(".swal2-container button:visible, .swal2-container input:visible").first(),
+      ];
+
+      for (const candidate of candidates) {
+        if (await candidate.isVisible().catch(() => false)) {
+          await candidate.click({ force: true }).catch(() => undefined);
+          await this.page.waitForTimeout(500);
+          return;
+        }
+      }
+
+      const frameStillOpen = await this.waitForChangeLimitFrame(750);
+      if (!frameStillOpen) {
+        return;
+      }
+      await this.page.waitForTimeout(500);
+    }
+  }
+
+  private async dismissBlockingOverlays(): Promise<void> {
+    await this.closeEvaSuggestionPopup();
+    await this.closeGenericModalButtons();
+  }
+
+  private async closeEvaSuggestionPopup(): Promise<void> {
+    const popup = this.page
+      .locator("div, section, aside")
+      .filter({ has: this.page.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio/i).first() })
+      .last();
+
+    if (!(await popup.isVisible().catch(() => false))) return;
+
+    const closeCandidates = [
+      popup.locator("button[aria-label*='fechar' i], button[title*='fechar' i], button[aria-label*='close' i]").first(),
+      popup.locator("button").filter({ hasNotText: /liberar restri..o/i }).first(),
+      popup.locator("[role='button']").filter({ hasNotText: /liberar restri..o/i }).first(),
+    ];
+
+    for (const candidate of closeCandidates) {
+      if (await candidate.isVisible().catch(() => false)) {
+        await candidate.click({ force: true }).catch(() => undefined);
+        await this.page.waitForTimeout(300);
+        if (!(await popup.isVisible().catch(() => false))) return;
+      }
+    }
+
+    await popup.evaluate((element) => {
+      const root = element as HTMLElement;
+      const clickable = Array.from(root.querySelectorAll("button, [role='button']")).find((node) => {
+        const text = (node.textContent ?? "").trim().toLowerCase();
+        return text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
+      }) as HTMLElement | undefined;
+      clickable?.click();
+    }).catch(() => undefined);
+    await this.page.waitForTimeout(300);
+  }
+
+  private async closeGenericModalButtons(): Promise<void> {
+    const selectors = [
+      "button[aria-label*='fechar' i]",
+      "button[title*='fechar' i]",
+      "button[aria-label*='close' i]",
+      "button[title*='close' i]",
+    ];
+    for (const selector of selectors) {
+      const button = this.page.locator(selector).first();
+      if (await button.isVisible().catch(() => false)) {
+        await button.click({ force: true }).catch(() => undefined);
+        await this.page.waitForTimeout(200);
+      }
+    }
   }
 }
