@@ -182,6 +182,7 @@ test("plate and amount in same message request confirmation", async () => {
 
   assert.match(sentMessages[0].body, /CONFIRMAR/i);
   assert.match(sentMessages[0].body, /PWH4E85/);
+  assert.match(sentMessages[0].body, /10,00|10\.00|R\$\s*10,00/i);
 });
 
 test("separated plate and amount asks only the missing field", async () => {

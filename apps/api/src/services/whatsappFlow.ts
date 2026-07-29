@@ -141,7 +141,10 @@ function parsePlateAndAmount(text: string): {
 } {
   const normalized = normalizeMessageText(text);
   const plateMatch = normalized.match(/[A-Za-z]{3}[-\s]?[0-9][A-Za-z0-9][0-9]{2}/);
-  const amountMatch = normalized.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})|(?:R\$\s*)?\d+(?:\.\d{2})?/);
+  const amountSource = plateMatch?.[0]
+    ? normalized.replace(plateMatch[0], " ").trim()
+    : normalized;
+  const amountMatch = amountSource.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})|(?:R\$\s*)?\d+(?:\.\d{2})?/);
 
   let amountCents: number | undefined;
   let invalidAmount = false;
