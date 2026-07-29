@@ -1,5 +1,6 @@
 import {
   buildRequestIdempotencyKey,
+  formatAppDateTime,
   evaluateLimitPolicy,
   formatRequestProtocol,
   isValidBrazilianPlate,
@@ -220,7 +221,7 @@ function buildSuccessMessage(input: {
     `Placa: ${input.plate}`,
     `Limite anterior: ${formatCurrency(input.previousLimit)}`,
     `Novo limite: ${formatCurrency(input.newLimit)}`,
-    `Data e hora: ${input.executedAt.toLocaleString("pt-BR")}`,
+    `Data e hora: ${formatAppDateTime(input.executedAt)}`,
     `Protocolo: ${input.protocol}`,
   ].join("\n");
 }
@@ -482,7 +483,7 @@ export class WhatsappFlowService {
         provider: this.provider,
         recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
         toPhoneE164: input.phoneE164,
-        body: `A autenticacao foi bloqueada temporariamente. Tente novamente apos ${new Date(session.locked_until).toLocaleTimeString("pt-BR")}.`,
+        body: `A autenticacao foi bloqueada temporariamente. Tente novamente apos ${formatAppDateTime(session.locked_until)}.`,
         replyToMessageId: input.providerMessageId,
       });
       return;

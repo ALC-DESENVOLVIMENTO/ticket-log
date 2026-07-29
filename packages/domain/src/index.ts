@@ -1,4 +1,5 @@
 export * from "./cpf.js";
+export * from "./dateTime.js";
 export * from "./errors.js";
 export * from "./idempotency.js";
 export * from "./money.js";

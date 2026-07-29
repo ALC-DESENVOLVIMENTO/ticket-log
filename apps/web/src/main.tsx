@@ -307,6 +307,19 @@ function money(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function appDateTime(value: string | number | Date | undefined | null) {
+  if (!value) return "n/d";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: import.meta.env.VITE_APP_TIME_ZONE ?? "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
 function shortProtocol(requestId: string | undefined) {
   const compact = String(requestId ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
   return `TL-${(compact.slice(0, 8) || "SEMID")}`;
@@ -523,7 +536,7 @@ function ApprovalView({ token, onAuthNeeded }: { token: string; onAuthNeeded: ()
             <dt>Valor adicional</dt><dd>{money(request.requestedAmount)}</dd>
             <dt>Solicitante</dt><dd>{request.requesterName}</dd>
             <dt>Status</dt><dd>{request.status}</dd>
-            <dt>Expira em</dt><dd>{new Date(request.tokenExpiresAt).toLocaleString("pt-BR")}</dd>
+            <dt>Expira em</dt><dd>{appDateTime(request.tokenExpiresAt)}</dd>
           </dl>
         )}
         <button onClick={approve}>
@@ -779,7 +792,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
             <span>Limite anterior: {request.previous_limit ? money(request.previous_limit) : "n/d"}</span>
             <span>Novo limite: {request.new_limit ? money(request.new_limit) : "n/d"}</span>
             <span>Resultado plataforma: {request.platform_result ?? "aguardando"}</span>
-            <span>Criado em: {request.created_at ? new Date(request.created_at).toLocaleString("pt-BR") : "n/d"}</span>
+            <span>Criado em: {appDateTime(request.created_at)}</span>
           </div>
           <div className="action-row">
             {["AGUARDANDO_AUTENTICACAO", "AGUARDANDO_APROVACAO"].includes(request.status) && (
@@ -844,7 +857,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
                 {events.map((event: any, index: number) => (
                   <div key={`${event.event_type}-${index}`} className="timeline-row">
                     <strong>{event.event_type}</strong>
-                    <span>{new Date(event.created_at).toLocaleString("pt-BR")}</span>
+                    <span>{appDateTime(event.created_at)}</span>
                   </div>
                 ))}
               </div>
@@ -992,9 +1005,7 @@ function OperationsPanel({ user }: { user: any }) {
   }
 
   const isMine = session?.operator?.userId === user?.id;
-  const heartbeat = session?.heartbeatAt
-    ? new Date(session.heartbeatAt).toLocaleString("pt-BR")
-    : "nao recebido";
+  const heartbeat = session?.heartbeatAt ? appDateTime(session.heartbeatAt) : "nao recebido";
 
   return (
     <div className="operations-layout">
@@ -1153,7 +1164,7 @@ function OperationsPanel({ user }: { user: any }) {
                 {item.authenticatedUserName ?? "Nao autenticado"} · escopo {item.operationScope ?? "GERAL"}
               </span>
               <span>
-                Ultima interacao: {item.lastInteractionAt ? new Date(item.lastInteractionAt).toLocaleString("pt-BR") : "n/d"}
+                Ultima interacao: {appDateTime(item.lastInteractionAt)}
               </span>
               <span>
                 Solicitação ativa: {item.activeRequestId ?? "nenhuma"}

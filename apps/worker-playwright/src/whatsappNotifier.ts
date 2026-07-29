@@ -1,5 +1,5 @@
 import { createWhatsappProvider } from "@ticketlog/whatsapp";
-import { formatRequestProtocol } from "@ticketlog/domain";
+import { formatAppDateTime, formatRequestProtocol } from "@ticketlog/domain";
 import {
   findRequestNotification,
   getRequestNotificationContext,
@@ -69,7 +69,7 @@ export async function notifyWhatsappResolvedRequest(requestId: string): Promise<
           `Placa: ${context.request.vehicle_plate}`,
           `Limite anterior: ${formatCurrency(context.request.previous_limit)}`,
           `Novo limite: ${formatCurrency(context.request.new_limit)}`,
-          `Data e hora: ${new Date().toLocaleString("pt-BR")}`,
+          `Data e hora: ${formatAppDateTime(new Date())}`,
           `Protocolo: ${protocol}`,
         ].join("\n")
       : changeLimitDone && evaFailed
