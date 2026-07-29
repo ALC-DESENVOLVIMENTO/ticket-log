@@ -193,3 +193,38 @@ test("starts another release from a completed EVA conversation", async () => {
     await browser.close();
   }
 });
+
+test("ignores a non-interactive parent that only mentions transactions", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <p>Relatorio de Transacoes</p>
+      <iframe id="eva-chat"></iframe>
+    `);
+    const chatFrame = page.frames().find((frame) => frame !== page.mainFrame());
+    assert.ok(chatFrame);
+    await chatFrame.setContent(`
+      <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+      <button
+        onclick="document.querySelector('#release').hidden = false"
+      >Transacoes</button>
+      <button
+        id="release"
+        hidden
+        onclick="document.querySelector('#plate-form').hidden = false"
+      >Liberar abastecimento (restricao)</button>
+      <section id="plate-form" hidden>
+        <textarea aria-label="Placa"></textarea>
+        <button>Enviar</button>
+      </section>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(await chatFrame.getByRole("textbox").inputValue(), "PWH4E85");
+  } finally {
+    await browser.close();
+  }
+});

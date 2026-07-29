@@ -188,10 +188,30 @@ export class EvaPage {
   private async getEvaSurface(timeoutMs = 10_000): Promise<Frame | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      let bestCandidate: { frame: Frame; score: number } | null = null;
       for (const frame of this.page.frames()) {
         const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
-        if (isEvaFrameCandidate(frame.url(), body)) return frame;
+        if (!isEvaFrameCandidate(frame.url(), body)) continue;
+
+        const visibleControls = await frame
+          .locator("button:visible, [role='button']:visible, textarea:visible, input:visible")
+          .count()
+          .catch(() => 0);
+        const hasOperationalText =
+          /transa..es|transactions|liberar abastecimento|incluir nova libera..o|voltar ao menu|sair e avaliar|digite aqui/i.test(
+            body,
+          );
+        const score =
+          (ticketLogUi.eva.rootText.test(body) ? 20 : 0) +
+          (hasOperationalText ? 15 : 0) +
+          Math.min(visibleControls, 10) +
+          (frame.url().includes(ticketLogUi.eva.frameHost) ? 3 : 0);
+
+        if (score >= 10 && (!bestCandidate || score > bestCandidate.score)) {
+          bestCandidate = { frame, score };
+        }
       }
+      if (bestCandidate) return bestCandidate.frame;
 
       await this.page.waitForTimeout(250);
     }
@@ -469,7 +489,7 @@ export class EvaPage {
           }
 
           return false;
-        }, ticketLogUi.eva.rootText.source)
+        }, `(?:${ticketLogUi.eva.rootText.source})|(?:${ticketLogUi.eva.releaseConfirmation.source})`)
         .catch(() => false);
       if (result) {
         console.info("ticketlog.eva:panel-close-control-clicked");
