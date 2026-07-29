@@ -1,6 +1,13 @@
 import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { formatCurrencyInput, IndeterminateResultError, ManualInterventionError, normalizePlate } from "@ticketlog/domain";
 
+export interface LimitChangeConfirmation {
+  platformResult: string;
+  previousLimit: number | null;
+  addedAmount: number | null;
+  newLimit: number | null;
+}
+
 export class FleetVehiclePage {
   constructor(private readonly page: Page) {}
 
@@ -113,7 +120,11 @@ export class FleetVehiclePage {
     return match ? Number(match[1]) : null;
   }
 
-  async addTemporaryLimit(input: { plate: string; amount: number; reason: string }): Promise<string> {
+  async addTemporaryLimit(input: {
+    plate: string;
+    amount: number;
+    reason: string;
+  }): Promise<LimitChangeConfirmation> {
     const formFrame = await this.openChangeLimitForm();
     await this.fillTemporaryLimitForm(formFrame, input);
     await this.dismissBlockingOverlays();
@@ -121,7 +132,7 @@ export class FleetVehiclePage {
     await formFrame.locator("input#btnAlterar, input[type='button'][value='Alterar']").first().click();
     await this.confirmLimitSubmission();
 
-    const confirmation = await this.waitForLimitChangeConfirmation();
+    const confirmation = await this.waitForLimitChangeConfirmation(input.plate);
     if (!confirmation) {
       throw new IndeterminateResultError("CHANGE_LIMIT_CONFIRMATION_NOT_FOUND");
     }
@@ -283,10 +294,10 @@ export class FleetVehiclePage {
     await expect(plateCheckbox).toBeChecked();
   }
 
-  private async waitForLimitChangeConfirmation(): Promise<string | null> {
+  private async waitForLimitChangeConfirmation(plate: string): Promise<LimitChangeConfirmation | null> {
     const deadline = Date.now() + 60_000;
     const successPattern =
-      /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar|limit.*(?:changed|updated).*success|operation.*success|successfully.*(?:changed|updated)/i;
+      /altera..es? de limite foram efetuadas|alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar|limit.*(?:changed|updated).*success|operation.*success|successfully.*(?:changed|updated)/i;
     const validationErrorPattern =
       /preencha|campo obrigat.rio|selecione ao menos|valor inv.lido|n.o foi poss.vel|erro ao alterar/i;
 
@@ -295,9 +306,19 @@ export class FleetVehiclePage {
       await this.dismissBlockingOverlays();
 
       for (const scope of [this.page, ...this.page.frames()]) {
+        const resultTable = await this.readLimitChangeResult(scope, plate);
+        if (resultTable) return resultTable;
+
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
         const match = bodyText.match(successPattern);
-        if (match) return bodyText.slice(0, 500);
+        if (match) {
+          return {
+            platformResult: bodyText.slice(0, 500),
+            previousLimit: null,
+            addedAmount: null,
+            newLimit: null,
+          };
+        }
         if (validationErrorPattern.test(bodyText) && /limite|alterar/i.test(bodyText)) {
           throw new ManualInterventionError("CHANGE_LIMIT_VALIDATION_OR_PLATFORM_ERROR");
         }
@@ -310,7 +331,12 @@ export class FleetVehiclePage {
         const changeCardVisible = await this.page.getByText(/^\s*(?:alterar\s+limite|change\s+limit)\s*$/i).first().isVisible().catch(() => false);
 
         if (detailsVisible && (limitVisible || changeCardVisible)) {
-          return "ALTERACAO_SUBMETIDA_SEM_BANNER_EXPLICITO";
+          return {
+            platformResult: "ALTERACAO_SUBMETIDA_SEM_BANNER_EXPLICITO",
+            previousLimit: null,
+            addedAmount: null,
+            newLimit: null,
+          };
         }
       }
 
@@ -318,6 +344,74 @@ export class FleetVehiclePage {
     }
 
     return null;
+  }
+
+  private async readLimitChangeResult(
+    scope: Page | Frame,
+    plate: string,
+  ): Promise<LimitChangeConfirmation | null> {
+    return scope
+      .locator("table:visible")
+      .evaluateAll(
+        (tables, expectedPlate) => {
+          const normalize = (value: string) =>
+            value
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim();
+          const parseMoney = (value: string): number | null => {
+            const cleaned = value.replace(/[^\d,.-]/g, "");
+            if (!cleaned) return null;
+            const normalized = cleaned.includes(",")
+              ? cleaned.replace(/\./g, "").replace(",", ".")
+              : cleaned;
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? parsed : null;
+          };
+
+          for (const table of tables) {
+            const rows = Array.from(table.querySelectorAll("tr"));
+            const headerIndex = rows.findIndex((row) => {
+              const text = normalize(row.textContent ?? "");
+              return (
+                text.includes("limite anterior") &&
+                text.includes("valor alterado") &&
+                text.includes("limite atual")
+              );
+            });
+            if (headerIndex < 0) continue;
+
+            const headers = Array.from(rows[headerIndex].querySelectorAll("th, td")).map((cell) =>
+              normalize(cell.textContent ?? ""),
+            );
+            const previousIndex = headers.findIndex((header) => header === "limite anterior");
+            const addedIndex = headers.findIndex((header) => header === "valor alterado");
+            const currentIndex = headers.findIndex((header) => header === "limite atual");
+            if (previousIndex < 0 || addedIndex < 0 || currentIndex < 0) continue;
+
+            const resultRow = rows.slice(headerIndex + 1).find((row) =>
+              normalize(row.textContent ?? "").includes(normalize(expectedPlate)),
+            );
+            if (!resultRow) continue;
+
+            const cells = Array.from(resultRow.querySelectorAll("th, td")).map(
+              (cell) => cell.textContent?.trim() ?? "",
+            );
+            return {
+              platformResult: "ALTERACAO_CONFIRMADA_PELA_TELA_DE_RESULTADO",
+              previousLimit: parseMoney(cells[previousIndex] ?? ""),
+              addedAmount: parseMoney(cells[addedIndex] ?? ""),
+              newLimit: parseMoney(cells[currentIndex] ?? ""),
+            };
+          }
+
+          return null;
+        },
+        normalizePlate(plate),
+      )
+      .catch(() => null);
   }
 
   private async findVisible(
@@ -394,10 +488,38 @@ export class FleetVehiclePage {
   }
 
   private async navigateToVehicleListThroughUi(): Promise<void> {
-    await this.gotoHome();
+    const reachedHome = await this.gotoHome()
+      .then(() => true)
+      .catch(() => false);
+    if (!reachedHome) {
+      await this.clickLegacyBackButton();
+      await this.gotoHome();
+    }
     console.info({ url: this.page.url() }, "ticketlog.navigation:home-ui");
     await this.clickVehicleListEntrypoint();
     console.info({ url: this.page.url() }, "ticketlog.navigation:vehicle-quick-access");
+  }
+
+  private async clickLegacyBackButton(): Promise<void> {
+    for (const scope of [this.page, ...this.page.frames()]) {
+      const backButton = await this.findVisible(
+        [
+          scope.getByRole("button", { name: /^\s*(?:voltar|back)\s*$/i }).first(),
+          scope.locator("input[type='button'][value='Voltar' i], input[type='submit'][value='Voltar' i]").first(),
+          scope.getByText(/^\s*(?:voltar|back)\s*$/i).first(),
+        ],
+        "LEGACY_BACK_BUTTON_NOT_FOUND",
+      ).catch(() => null);
+      if (!backButton) continue;
+
+      await backButton.click({ force: true });
+      await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await this.page.waitForTimeout(750);
+      console.info({ url: this.page.url() }, "ticketlog.navigation:legacy-result-back");
+      return;
+    }
+
+    throw new ManualInterventionError("LEGACY_RESULT_BACK_BUTTON_NOT_FOUND");
   }
 
   private async clickHomeEntrypoint(timeoutMs = 20_000): Promise<void> {

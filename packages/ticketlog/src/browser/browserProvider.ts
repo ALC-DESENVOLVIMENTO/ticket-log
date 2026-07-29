@@ -138,10 +138,18 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       let newLimit: number | null = null;
 
       try {
-        platformResult = await fleet.addTemporaryLimit({
+        const confirmation = await fleet.addTemporaryLimit({
           plate: input.vehiclePlate,
           amount: input.requestedAmount,
           reason: ".",
+        });
+        platformResult = confirmation.platformResult;
+        newLimit = confirmation.newLimit;
+        this.assertLimitChangeConfirmation({
+          requestId: input.requestId,
+          previousLimit,
+          requestedAmount: input.requestedAmount,
+          confirmation,
         });
       } catch (error) {
         if (!(error instanceof IndeterminateResultError)) throw error;
@@ -172,8 +180,28 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       }
 
       console.info({ requestId: input.requestId, platformResult }, "ticketlog.changeLimit:limit-changed");
-      if (newLimit === null) {
-        newLimit = await fleet.readCurrentLimit();
+      const verifiedLimit =
+        platformResult === "ALTERACAO_CONFIRMADA_POR_LEITURA_DO_LIMITE" && newLimit !== null
+          ? newLimit
+          : await this.pollLimitAfterConfirmedSubmission({
+              fleet,
+              vehiclePlate: input.vehiclePlate,
+            });
+      if (verifiedLimit !== null) {
+        const expectedLimit =
+          previousLimit !== null ? Number((previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
+        if (expectedLimit !== null && Math.abs(verifiedLimit - expectedLimit) >= 0.01) {
+          throw new IndeterminateResultError(
+            `LIMIT_READBACK_DIVERGED_AFTER_CONFIRMATION:expected=${expectedLimit}:current=${verifiedLimit}`,
+          );
+        }
+        newLimit = verifiedLimit;
+        platformResult =
+          platformResult === "ALTERACAO_CONFIRMADA_PELA_TELA_DE_RESULTADO"
+            ? "ALTERACAO_CONFIRMADA_PELA_TELA_E_LEITURA_DO_LIMITE"
+            : platformResult;
+      } else if (newLimit === null) {
+        throw new IndeterminateResultError("LIMIT_READBACK_NOT_AVAILABLE_AFTER_CONFIRMATION");
       }
       console.info({ requestId: input.requestId, newLimit }, "ticketlog.changeLimit:new-limit");
 
@@ -353,6 +381,61 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   }): Promise<number | null> {
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     return this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch(() => null);
+  }
+
+  private async pollLimitAfterConfirmedSubmission(input: {
+    fleet: FleetVehiclePage;
+    vehiclePlate: string;
+  }): Promise<number | null> {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    return this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch((error) => {
+      console.warn(
+        {
+          plate: input.vehiclePlate,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+        "ticketlog.changeLimit:confirmed-result-readback-unavailable",
+      );
+      return null;
+    });
+  }
+
+  private assertLimitChangeConfirmation(input: {
+    requestId: string;
+    previousLimit: number | null;
+    requestedAmount: number;
+    confirmation: {
+      previousLimit: number | null;
+      addedAmount: number | null;
+      newLimit: number | null;
+    };
+  }): void {
+    const expectedLimit =
+      input.previousLimit !== null
+        ? Number((input.previousLimit + Number(input.requestedAmount)).toFixed(2))
+        : null;
+    const mismatches = [
+      input.previousLimit !== null &&
+      input.confirmation.previousLimit !== null &&
+      Math.abs(input.confirmation.previousLimit - input.previousLimit) >= 0.01
+        ? "previous"
+        : null,
+      input.confirmation.addedAmount !== null &&
+      Math.abs(input.confirmation.addedAmount - Number(input.requestedAmount)) >= 0.01
+        ? "added"
+        : null,
+      expectedLimit !== null &&
+      input.confirmation.newLimit !== null &&
+      Math.abs(input.confirmation.newLimit - expectedLimit) >= 0.01
+        ? "current"
+        : null,
+    ].filter(Boolean);
+
+    if (mismatches.length > 0) {
+      throw new IndeterminateResultError(
+        `LIMIT_RESULT_TABLE_DIVERGED:${mismatches.join(",")}:request=${input.requestId}`,
+      );
+    }
   }
 
   private async ensureAuthenticated(page: Page): Promise<void> {

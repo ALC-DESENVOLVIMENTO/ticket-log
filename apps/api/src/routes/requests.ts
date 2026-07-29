@@ -236,8 +236,19 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
           operationScope: user.operation_scope,
         });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
-    if (!["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL", "LIMITE_ALTERADO"].includes(found.status)) {
+    if (
+      ![
+        "NA_FILA",
+        "FALHA_REPROCESSAVEL",
+        "FALHA_MANUAL",
+        "RESULTADO_INDETERMINADO",
+        "LIMITE_ALTERADO",
+      ].includes(found.status)
+    ) {
       return reply.code(409).send({ error: "REQUEST_NOT_RETRYABLE" });
+    }
+    if (found.status === "RESULTADO_INDETERMINADO") {
+      await transitionRequest(found.id, "FALHA_MANUAL");
     }
     if (!["NA_FILA", "LIMITE_ALTERADO"].includes(found.status)) {
       await transitionRequest(found.id, "NA_FILA");
