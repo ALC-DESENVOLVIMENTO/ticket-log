@@ -15,10 +15,12 @@ import { hasStorageStateFile, hasUserDataDirState, resolveStorageStatePath, reso
 
 interface BrowserSession {
   context: BrowserContext;
+  page: Page;
   close(): Promise<void>;
 }
 
 let sharedContextPromise: Promise<BrowserContext> | undefined;
+let sharedOperationalPage: Page | undefined;
 
 function browserLaunchArgs(headless: boolean): string[] | undefined {
   const args = [
@@ -45,12 +47,35 @@ async function launchSharedPersistentContext(): Promise<BrowserContext> {
   });
 }
 
+async function getSharedOperationalPage(context: BrowserContext): Promise<Page> {
+  if (sharedOperationalPage && !sharedOperationalPage.isClosed()) {
+    return sharedOperationalPage;
+  }
+
+  const pages = context.pages().filter((page) => !page.isClosed());
+  sharedOperationalPage =
+    [...pages]
+      .reverse()
+      .find((page) => /(?:plataforma\.ticketlog\.com\.br|edenred\.io)/i.test(page.url())) ??
+    pages.find((page) => page.url() !== "about:blank") ??
+    pages[0] ??
+    (await context.newPage());
+
+  for (const page of pages) {
+    if (page === sharedOperationalPage) continue;
+    if (page.url() === "about:blank" || /plataforma\.ticketlog\.com\.br/i.test(page.url())) {
+      await page.close().catch(() => undefined);
+    }
+  }
+
+  return sharedOperationalPage;
+}
+
 export async function initializeBrowserStation(): Promise<void> {
   if (process.env.TICKETLOG_STATION_MODE !== "true") return;
   sharedContextPromise ??= launchSharedPersistentContext();
   const context = await sharedContextPromise;
-  const pages = context.pages();
-  const page = pages[0] ?? await context.newPage();
+  const page = await getSharedOperationalPage(context);
   if (page.url() === "about:blank") {
     await page.goto(process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home");
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -61,6 +86,7 @@ export async function closeBrowserStation(): Promise<void> {
   if (!sharedContextPromise) return;
   const context = await sharedContextPromise;
   sharedContextPromise = undefined;
+  sharedOperationalPage = undefined;
   await context.close();
 }
 
@@ -72,7 +98,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     const session = await this.createBrowserSession();
     const context = session.context;
-    const page = await context.newPage();
+    const page = session.page;
 
     try {
       console.info({ requestId: input.requestId, plate: input.vehiclePlate }, "ticketlog.changeLimit:start");
@@ -161,7 +187,6 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
         platformResult,
       };
     } finally {
-      await page.close().catch(() => undefined);
       await session.close();
     }
   }
@@ -173,7 +198,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     const session = await this.createBrowserSession();
     const context = session.context;
-    const page = await context.newPage();
+    const page = session.page;
     try {
       await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao Ticket Log" });
       await this.ensureAuthenticated(page);
@@ -197,7 +222,6 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await this.saveStorageState(context);
       return currentLimit;
     } finally {
-      await page.close().catch(() => undefined);
       await session.close();
     }
   }
@@ -207,7 +231,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     const session = await this.createBrowserSession();
     const context = session.context;
-    const page = await context.newPage();
+    const page = session.page;
     try {
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:start");
       await this.emit({ status: "SESSION_CHECKING", currentUrl: page.url(), message: "Validando sessao para EVA" });
@@ -222,7 +246,6 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:released");
       await this.saveStorageState(context);
     } finally {
-      await page.close().catch(() => undefined);
       await session.close();
     }
   }
@@ -239,8 +262,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       if (!sharedContextPromise) {
         sharedContextPromise = launchSharedPersistentContext();
       }
+      const context = await sharedContextPromise;
       return {
-        context: await sharedContextPromise,
+        context,
+        page: await getSharedOperationalPage(context),
         close: async () => undefined,
       };
     }
@@ -251,6 +276,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       const context = await this.launchPersistentContext(userDataDir, headless);
       return {
         context,
+        page: context.pages()[0] ?? (await context.newPage()),
         close: () => context.close(),
       };
     }
@@ -259,6 +285,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const context = await this.createContext(browser);
     return {
       context,
+      page: await context.newPage(),
       close: () => browser.close(),
     };
   }
@@ -289,7 +316,23 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   private async openEvaHostPage(page: Page): Promise<void> {
     const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
 
-    await page.goto(homeUrl);
+    if (/plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(page.url())) {
+      return;
+    }
+
+    const homeEntry = page
+      .getByRole("link", { name: /in.cio|home/i })
+      .or(page.getByText(/^\s*(?:in.cio|home)\s*$/i))
+      .first();
+    if (await homeEntry.isVisible().catch(() => false)) {
+      await homeEntry.click().catch(() => undefined);
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      if (/plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(page.url())) {
+        return;
+      }
+    }
+
+    await page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
@@ -312,30 +355,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     previousLimit: number | null;
     requestedAmount: number;
   }): Promise<number | null> {
-    const deadline = Date.now() + 45_000;
-    const expectedLimit =
-      input.previousLimit !== null ? Number((input.previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
-
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-      const currentLimit = await this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch(() => null);
-      if (currentLimit === null) {
-        continue;
-      }
-
-      const deltaMatches =
-        input.previousLimit !== null &&
-        Math.abs((currentLimit - input.previousLimit) - Number(input.requestedAmount)) < 0.01;
-      const expectedMatches = expectedLimit !== null && Math.abs(currentLimit - expectedLimit) < 0.01;
-      if (deltaMatches || expectedMatches) {
-        return currentLimit;
-      }
-      if (input.previousLimit !== null && Math.abs(currentLimit - input.previousLimit) < 0.01) {
-        continue;
-      }
-      return currentLimit;
-    }
-
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
     return this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch(() => null);
   }
 
@@ -345,8 +365,18 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
     const targetUrl = loginUrl ?? homeUrl;
 
-    await page.goto(targetUrl);
-    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    if (await this.isAuthenticatedPlatformPage(page)) {
+      await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
+      return;
+    }
+
+    if (
+      page.url() === "about:blank" ||
+      !/(?:plataforma\.ticketlog\.com\.br|edenred\.io)/i.test(page.url())
+    ) {
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    }
 
     if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
       await this.emit({
@@ -418,6 +448,21 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
   }
 
+  private async isAuthenticatedPlatformPage(page: Page): Promise<boolean> {
+    if (!/plataforma\.ticketlog\.com\.br/i.test(page.url())) return false;
+    if (await this.requiresHumanChallenge(page)) return false;
+
+    const loginVisible =
+      (await page.getByLabel(/usu.rio|e-mail|email|login/i).first().isVisible().catch(() => false)) ||
+      (await page.getByLabel(/senha/i).first().isVisible().catch(() => false));
+    if (loginVisible) return false;
+
+    const bodyText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    return /in.cio|home|cadastros|registers|acesso r.pido|quick access|altera..o de limite|detalhes do ve.culo/i.test(
+      bodyText,
+    );
+  }
+
   private challengeType(url: string): string {
     if (/trusted-device/i.test(url)) return "TRUSTED_DEVICE";
     if (/otp/i.test(url)) return "OTP_SMS";
@@ -440,7 +485,6 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   }
 
   private async waitForManualLogin(page: Page): Promise<void> {
-    const vehicleListUrl = process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list";
     const timeoutMs = Number(process.env.TICKETLOG_MANUAL_LOGIN_TIMEOUT_MS ?? 15 * 60_000);
 
     console.error(
@@ -487,8 +531,6 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
     }
 
     await this.saveStorageState(page.context());
-    await page.goto(vehicleListUrl);
-    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
   private assertRealExecutionAllowed(input: TicketLogLimitInput): void {

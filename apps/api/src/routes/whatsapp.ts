@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   createWhatsappProvider,
@@ -5,6 +6,7 @@ import {
   verifyMetaWebhookSignature,
 } from "@ticketlog/whatsapp";
 import { recordWhatsappMessage } from "@ticketlog/db";
+import { acquireLock } from "@ticketlog/queue";
 import { config } from "../config.js";
 import { WhatsappFlowService } from "../services/whatsappFlow.js";
 
@@ -42,18 +44,28 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
 
     const messages = extractMetaMessages(request.body);
     for (const message of messages) {
-      const isNew = await recordWhatsappMessage({
-        providerMessageId: message.providerMessageId,
-        phoneE164: message.phoneE164,
-        direction: "in",
-        body: message.text,
-        payload: request.body,
-      });
-      if (!isNew) {
-        continue;
+      const phoneLockKey = createHash("sha256").update(message.phoneE164).digest("hex");
+      const lock = await acquireLock(`whatsapp-session:${phoneLockKey}`, 30_000);
+      if (!lock.acquired) {
+        return reply.code(503).send({ error: "WHATSAPP_SESSION_BUSY" });
       }
 
-      await flow.handleInboundMessage(message);
+      try {
+        const isNew = await recordWhatsappMessage({
+          providerMessageId: message.providerMessageId,
+          phoneE164: message.phoneE164,
+          direction: "in",
+          body: message.text,
+          payload: request.body,
+        });
+        if (!isNew) {
+          continue;
+        }
+
+        await flow.handleInboundMessage(message);
+      } finally {
+        await lock.release();
+      }
     }
 
     return { ok: true };

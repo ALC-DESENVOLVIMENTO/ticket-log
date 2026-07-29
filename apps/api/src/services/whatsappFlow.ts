@@ -134,10 +134,6 @@ function sessionExpiry(now: Date): Date {
   return new Date(now.getTime() + config.whatsappSessionExpiryMinutes * 60_000);
 }
 
-function currentBucket(now: Date): string {
-  return now.toISOString().slice(0, 13);
-}
-
 function parsePlateAndAmount(text: string): {
   plate?: string;
   amountCents?: number;
@@ -912,6 +908,32 @@ export class WhatsappFlowService {
       Boolean(parsed.plate) ||
       (hasPendingPlate && (parsed.invalidAmount || parsed.amountCents !== undefined));
 
+    if (isStartNewRequest(text)) {
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AGUARDANDO_PLACA",
+        authenticatedUserId: user.id,
+        activeRequestId: null,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at ?? now,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Nova solicitacao iniciada. Informe a placa do veiculo.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
     if ((session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO" && !isConfirm(text)) {
       await sendGuidedMessage({
         provider: this.provider,
@@ -1014,7 +1036,7 @@ export class WhatsappFlowService {
           vehiclePlate: pendingFromSession.plate,
           vehicleGroup: pendingFromSession.vehicleGroup,
           requestedAmount: amount,
-          bucket: currentBucket(now),
+          bucket: `whatsapp-confirmation:${input.providerMessageId}`,
         }),
         vehiclePlate: pendingFromSession.plate,
         vehicleGroup: pendingFromSession.vehicleGroup,
@@ -1116,22 +1138,20 @@ export class WhatsappFlowService {
 
     const resolved = await resolvePendingInput(this.deps, user, pendingFromSession, text);
     if (resolved.message) {
+      const nextPending = resolved.pending ?? pendingFromSession;
       await this.deps.upsertWhatsappSession({
         phoneE164: input.phoneE164,
-        state:
-          pendingFromSession?.plate && !pendingFromSession?.amountCents
-            ? "AGUARDANDO_VALOR"
-            : "AGUARDANDO_PLACA",
+        state: nextPending?.plate ? "AGUARDANDO_VALOR" : "AGUARDANDO_PLACA",
         authenticatedUserId: user.id,
-        pendingVehiclePlate: resolved.pending?.plate ?? pendingFromSession?.plate ?? null,
-        pendingAmountCents: resolved.pending?.amountCents ?? pendingFromSession?.amountCents ?? null,
+        pendingVehiclePlate: nextPending?.plate ?? null,
+        pendingAmountCents: nextPending?.amountCents || null,
         failedCpfAttempts: 0,
         failedMfaAttempts: 0,
         authenticationAttempts: 0,
         authenticatedAt: session.authenticated_at ?? now,
         expiresAt: sessionExpiry(now),
         lastMessageId: input.providerMessageId,
-        metadata: resolved.pending ? { vehicleGroup: resolved.pending.vehicleGroup } : session.metadata,
+        metadata: nextPending ? { vehicleGroup: nextPending.vehicleGroup } : session.metadata,
       });
       await sendText({
         provider: this.provider,
@@ -1193,6 +1213,30 @@ export class WhatsappFlowService {
     now: Date,
   ): Promise<void> {
     let request = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
+    const parsed = parsePlateAndAmount(text);
+    if (
+      !session.active_request_id &&
+      (isStartNewRequest(text) || Boolean(parsed.plate) || Boolean(parsed.amountCents))
+    ) {
+      const reset = await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AUTENTICADO",
+        authenticatedUserId: session.authenticated_user_id,
+        activeRequestId: null,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
+      await this.handleRequestStep(reset, input, text, now);
+      return;
+    }
+
     if (!request && session.authenticated_user_id) {
       const latestRequest = await this.deps.getLatestWhatsappRequestByRequester(session.authenticated_user_id);
       if (latestRequest) {

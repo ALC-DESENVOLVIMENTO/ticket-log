@@ -7,14 +7,23 @@ export class FleetVehiclePage {
   async gotoVehicleList(): Promise<void> {
     const url = process.env.TICKETLOG_VEHICLE_LIST_URL;
     if (!url) throw new Error("TICKETLOG_VEHICLE_LIST_URL is required");
-    await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await this.dismissBlockingOverlays();
-    if (!(await this.waitForVehicleListReady(30_000))) {
-      const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
-      await this.page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+
+    if (await this.waitForVehicleListReady(1_500)) {
+      return;
+    }
+
+    const navigatedThroughUi = await this.clickVehicleListEntrypoint(5_000)
+      .then(() => true)
+      .catch(() => false);
+    if (navigatedThroughUi && (await this.waitForVehicleListReady(15_000))) {
+      return;
+    }
+
+    if (!/\/register\/fleet\/vehicle\/list(?:$|[?#])/i.test(this.page.url())) {
+      await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
       await this.dismissBlockingOverlays();
-      await this.clickVehicleListEntrypoint();
     }
 
     if (!(await this.waitForVehicleListReady())) {
@@ -369,7 +378,7 @@ export class FleetVehiclePage {
     return false;
   }
 
-  private async clickVehicleListEntrypoint(): Promise<void> {
+  private async clickVehicleListEntrypoint(timeoutMs = 30_000): Promise<void> {
     const entrypoint = await this.findVisible(
       [
         this.page.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
@@ -378,7 +387,7 @@ export class FleetVehiclePage {
         this.page.getByRole("button", { name: /ve.culo|vehicle|equipamento|equipment/i }).first(),
       ],
       "VEHICLE_LIST_ENTRYPOINT_NOT_FOUND",
-      30_000,
+      timeoutMs,
     );
 
     await entrypoint.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -477,18 +486,30 @@ export class FleetVehiclePage {
     while (Date.now() < deadline) {
       await this.dismissBlockingOverlays();
 
-      const candidates: Locator[] = [
-        this.page.locator("button.swal2-confirm, input.swal2-confirm").first(),
-        this.page.locator("div[role='dialog'] button, div[role='dialog'] input[type='button']").filter({ hasText: /confirmar|sim|alterar|ok/i }).first(),
-        this.page.getByRole("button", { name: /confirmar|sim|alterar|ok/i }).first(),
-        this.page.locator(".swal2-container button:visible, .swal2-container input:visible").first(),
-      ];
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const candidates: Locator[] = [
+          scope.locator("button.swal2-confirm, input.swal2-confirm").first(),
+          scope
+            .locator(
+              "div[role='dialog'] button, div[role='dialog'] input[type='button'], div[role='dialog'] input[type='submit']",
+            )
+            .filter({ hasText: /confirmar|sim|alterar|ok/i })
+            .first(),
+          scope.getByRole("button", { name: /^(?:confirmar|sim|alterar|ok)$/i }).first(),
+          scope
+            .locator(
+              "input[type='button'][value*='Confirmar' i], input[type='button'][value='OK' i], input[type='submit'][value*='Confirmar' i]",
+            )
+            .first(),
+          scope.locator(".swal2-container button:visible, .swal2-container input:visible").first(),
+        ];
 
-      for (const candidate of candidates) {
-        if (await candidate.isVisible().catch(() => false)) {
-          await candidate.click({ force: true }).catch(() => undefined);
-          await this.page.waitForTimeout(500);
-          return;
+        for (const candidate of candidates) {
+          if (await candidate.isVisible().catch(() => false)) {
+            await candidate.click({ force: true }).catch(() => undefined);
+            await this.page.waitForTimeout(500);
+            return;
+          }
         }
       }
 
@@ -503,118 +524,91 @@ export class FleetVehiclePage {
   private async dismissBlockingOverlays(): Promise<void> {
     await this.closeChromiumRestoreBubble();
     await this.closeEvaSuggestionPopup();
-    await this.closeGenericModalButtons();
   }
 
   private async closeEvaSuggestionPopup(): Promise<void> {
     const scopes: Array<Page | Frame> = [this.page, ...this.page.frames()];
     for (const scope of scopes) {
-      const popup = scope
-        .locator("div, section, aside")
-        .filter({
-          has: scope.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio|transa..o foi negada/i).first(),
-        })
-        .last();
+      const releaseAction = scope.getByText(/liberar restri..o/i).last();
+      if (!(await releaseAction.isVisible().catch(() => false))) continue;
 
-      if (!(await popup.isVisible().catch(() => false))) {
-        continue;
-      }
-
-      const closeCandidates = [
-        popup.locator("button[aria-label*='fechar' i], button[title*='fechar' i], button[aria-label*='close' i]").first(),
-        popup.locator("svg").locator("xpath=ancestor::*[@role='button' or self::button or self::a or self::div or self::span][1]").first(),
-        popup.locator("button").filter({ hasNotText: /liberar restri..o/i }).first(),
-        popup.locator("[role='button']").filter({ hasNotText: /liberar restri..o/i }).first(),
-      ];
-
-      for (const candidate of closeCandidates) {
-        if (await candidate.isVisible().catch(() => false)) {
-          await candidate.click({ force: true }).catch(() => undefined);
-          await this.page.waitForTimeout(250);
-          if (!(await popup.isVisible().catch(() => false))) return;
-        }
-      }
-
-      await popup
+      await releaseAction
         .evaluate((element) => {
-          const root = element as HTMLElement;
-          const clickable = Array.from(root.querySelectorAll("button, [role='button'], a, div, span, svg")).find((node) => {
-            const html = node as HTMLElement;
-            const text = (node.textContent ?? "").trim().toLowerCase();
-            const aria = (html.getAttribute("aria-label") ?? "").trim().toLowerCase();
-            const title = (html.getAttribute("title") ?? "").trim().toLowerCase();
-            const className = (html.className ?? "").toString().toLowerCase();
-            const style = window.getComputedStyle(html);
-            const rect = html.getBoundingClientRect();
-            const looksLikeClose =
-              aria.includes("fechar") ||
-              aria.includes("close") ||
-              title.includes("fechar") ||
-              title.includes("close") ||
-              className.includes("close") ||
-              className.includes("fechar");
-            const harmlessText = text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
-            const topRightCircle =
-              rect.width >= 12 &&
-              rect.width <= 64 &&
-              rect.height >= 12 &&
-              rect.height <= 64 &&
-              (style.borderRadius.includes("50") || style.borderRadius.includes("999"));
+          const normalize = (value: string) =>
+            value
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase();
+          let current: HTMLElement | null = element instanceof HTMLElement ? element : element.parentElement;
+          let popup: HTMLElement | null = null;
 
-            return (looksLikeClose || (harmlessText && topRightCircle)) && style.visibility !== "hidden";
-          }) as HTMLElement | SVGElement | undefined;
+          while (current) {
+            const rect = current.getBoundingClientRect();
+            const text = normalize(current.innerText ?? current.textContent ?? "");
+            if (
+              text.includes("posso ajudar") &&
+              text.includes("liberar restricao") &&
+              rect.width >= 220 &&
+              rect.width <= 700 &&
+              rect.height >= 180 &&
+              rect.height <= 850
+            ) {
+              popup = current;
+              break;
+            }
+            current = current.parentElement;
+          }
 
-          if (clickable instanceof HTMLElement) {
-            clickable.click();
+          if (!popup) return false;
+          const popupRect = popup.getBoundingClientRect();
+          const candidates = Array.from(
+            popup.querySelectorAll<HTMLElement>("button, [role='button'], a, div, span, svg"),
+          )
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              const text = normalize(node.innerText ?? node.textContent ?? "");
+              const metadata = normalize(
+                `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""} ${node.className?.toString() ?? ""}`,
+              );
+              const style = window.getComputedStyle(node);
+              const explicitClose = /fechar|close|dismiss/.test(metadata);
+              const topRightControl =
+                rect.width >= 12 &&
+                rect.width <= 72 &&
+                rect.height >= 12 &&
+                rect.height <= 72 &&
+                rect.right >= popupRect.right - 90 &&
+                rect.top <= popupRect.top + 90 &&
+                !text.includes("liberar restricao") &&
+                (node.tagName === "BUTTON" ||
+                  node.getAttribute("role") === "button" ||
+                  style.cursor === "pointer" ||
+                  Boolean(node.querySelector("svg")));
+              return { node, rect, explicitClose, topRightControl };
+            })
+            .filter((candidate) => candidate.explicitClose || candidate.topRightControl)
+            .sort((left, right) => {
+              if (left.explicitClose !== right.explicitClose) return left.explicitClose ? -1 : 1;
+              return right.rect.right - left.rect.right || left.rect.top - right.rect.top;
+            });
+
+          const target = candidates[0]?.node;
+          if (target) {
+            target.click();
             return true;
           }
 
-          if (clickable instanceof SVGElement) {
-            (clickable.closest("button, [role='button'], a, div, span") as HTMLElement | null)?.click();
-            return true;
-          }
-
-          return false;
+          const pointTarget = document.elementFromPoint(popupRect.right - 16, popupRect.top + 16);
+          const clickable = pointTarget?.closest<HTMLElement>("button, [role='button'], a, div, span");
+          if (!clickable) return false;
+          clickable.click();
+          return true;
         })
         .catch(() => false);
 
-      await this.page.waitForTimeout(250);
-      if (!(await popup.isVisible().catch(() => false))) return;
-
-      const box = await popup.boundingBox().catch(() => null);
-      if (box) {
-        const clickPoints = [
-          { x: box.x + box.width - 18, y: box.y + 18 },
-          { x: box.x + box.width - 8, y: box.y + 8 },
-          { x: box.x + box.width + 4, y: box.y + 10 },
-          { x: box.x + box.width + 8, y: box.y + 2 },
-          { x: box.x + box.width - 4, y: box.y - 2 },
-        ];
-
-        for (const point of clickPoints) {
-          await this.page.mouse.click(point.x, point.y).catch(() => undefined);
-          await this.page.waitForTimeout(250);
-          if (!(await popup.isVisible().catch(() => false))) return;
-        }
-      }
-    }
-
-    await this.page.keyboard.press("Escape").catch(() => undefined);
-    await this.page.waitForTimeout(250);
-  }
-
-  private async closeGenericModalButtons(): Promise<void> {
-    const selectors = [
-      "button[aria-label*='fechar' i]",
-      "button[title*='fechar' i]",
-      "button[aria-label*='close' i]",
-      "button[title*='close' i]",
-    ];
-    for (const selector of selectors) {
-      const button = this.page.locator(selector).first();
-      if (await button.isVisible().catch(() => false)) {
-        await button.click({ force: true }).catch(() => undefined);
-        await this.page.waitForTimeout(200);
+      await this.page.waitForTimeout(300);
+      if (await releaseAction.isVisible().catch(() => false)) {
+        throw new ManualInterventionError("EVA_SUGGESTION_POPUP_NOT_DISMISSED");
       }
     }
   }

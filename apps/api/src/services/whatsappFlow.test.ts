@@ -219,6 +219,90 @@ test("separated plate and amount asks only the missing field", async () => {
   assert.match(sentMessages[0].body, /novo limite/i);
 });
 
+test("separated plate and amount preserves the plate state for the next message", async () => {
+  let currentSession = buildSession({
+    state: "AUTENTICADO",
+    authenticated_user_id: "user-1",
+    authenticated_at: new Date(),
+  });
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () => currentSession,
+    upsertWhatsappSession: async (input: any) => {
+      currentSession = buildSession({
+        state: input.state,
+        authenticated_user_id: input.authenticatedUserId ?? currentSession.authenticated_user_id,
+        active_request_id: input.activeRequestId ?? null,
+        pending_vehicle_plate: input.pendingVehiclePlate ?? null,
+        pending_amount_cents: input.pendingAmountCents ?? null,
+        authenticated_at: input.authenticatedAt ?? currentSession.authenticated_at,
+        metadata: input.metadata ?? {},
+      });
+      return currentSession;
+    },
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-separated-plate",
+    phoneE164: "+5511999999999",
+    text: "PWH4E85",
+  });
+  assert.equal(currentSession.state, "AGUARDANDO_VALOR");
+  assert.equal(currentSession.pending_vehicle_plate, "PWH4E85");
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-separated-amount",
+    phoneE164: "+5511999999999",
+    text: "10",
+  });
+
+  assert.equal(currentSession.state, "AGUARDANDO_CONFIRMACAO");
+  assert.match(sentMessages[sentMessages.length - 1].body, /Confirme os dados da solicitacao/i);
+});
+
+test("confirmation message id makes each legitimate Whatsapp request unique", async () => {
+  let capturedIdempotencyKey = "";
+  const { service } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AGUARDANDO_CONFIRMACAO",
+        authenticated_user_id: "user-1",
+        pending_vehicle_plate: "PWH4E85",
+        pending_amount_cents: 1000,
+        authenticated_at: new Date(),
+        metadata: { vehicleGroup: "UTILITARIOS" },
+      }),
+    createRequest: async (input: any) => {
+      capturedIdempotencyKey = input.idempotencyKey;
+      return {
+        id: "req-unique",
+        requester_id: "user-1",
+        vehicle_plate: "PWH4E85",
+        vehicle_group: "UTILITARIOS",
+        requested_amount: "10.00",
+        channel: "whatsapp",
+        status: "NA_FILA",
+        expires_at: new Date(),
+      } as any;
+    },
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "wamid.unique-confirmation",
+    phoneE164: "+5511999999999",
+    text: "confirmar",
+  });
+
+  const firstKey = capturedIdempotencyKey;
+  capturedIdempotencyKey = "";
+  await service.handleInboundMessage({
+    providerMessageId: "wamid.another-confirmation",
+    phoneE164: "+5511999999999",
+    text: "confirmar",
+  });
+
+  assert.notEqual(firstKey, capturedIdempotencyKey);
+});
+
 test("request requiring approval is parked instead of enqueued", async () => {
   const previousThreshold = config.groupPolicies.UTILITARIOS.doubleApprovalFrom;
   config.groupPolicies.UTILITARIOS.doubleApprovalFrom = 5;
@@ -438,4 +522,69 @@ test("new request option from no active status asks directly for plate", async (
   });
 
   assert.match(sentMessages[0].body, /Informe a placa do veiculo/i);
+});
+
+test("new request option does not restore the latest terminal request", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "ERRO",
+        authenticated_user_id: "user-1",
+        active_request_id: null,
+        authenticated_at: new Date(),
+      }),
+    getLatestWhatsappRequestByRequester: async () =>
+      ({
+        id: "req-old-terminal",
+        requester_id: "user-1",
+        vehicle_plate: "OLD1A23",
+        vehicle_group: "UTILITARIOS",
+        requested_amount: "10.00",
+        channel: "whatsapp",
+        status: "RESULTADO_INDETERMINADO",
+        expires_at: new Date(),
+      }) as any,
+    upsertWhatsappSession: async (input: any) =>
+      buildSession({
+        state: input.state,
+        authenticated_user_id: input.authenticatedUserId ?? "user-1",
+        active_request_id: input.activeRequestId ?? null,
+        pending_vehicle_plate: input.pendingVehiclePlate ?? null,
+        pending_amount_cents: input.pendingAmountCents ?? null,
+        authenticated_at: input.authenticatedAt ?? new Date(),
+        metadata: input.metadata ?? {},
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-new-after-error",
+    phoneE164: "+5511999999999",
+    text: "op_nova_solicitacao",
+  });
+
+  assert.match(sentMessages[0].body, /Nova solicitacao iniciada|Informe a placa do veiculo/i);
+  assert.doesNotMatch(sentMessages[0].body, /OLD1A23|RESULTADO_INDETERMINADO/i);
+});
+
+test("new request option replaces an unfinished draft", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AGUARDANDO_CONFIRMACAO",
+        authenticated_user_id: "user-1",
+        pending_vehicle_plate: "PWH4E85",
+        pending_amount_cents: 1000,
+        authenticated_at: new Date(),
+        metadata: { vehicleGroup: "UTILITARIOS" },
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-replace-draft",
+    phoneE164: "+5511999999999",
+    text: "op_nova_solicitacao",
+  });
+
+  assert.match(sentMessages[0].body, /Nova solicitacao iniciada/i);
+  assert.doesNotMatch(sentMessages[0].body, /confirme a solicitacao ou cancele/i);
 });
