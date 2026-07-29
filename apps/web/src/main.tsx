@@ -26,10 +26,12 @@ import {
   getRequestDetails,
   getSessionToken,
   getTicketLogSessionStatus,
+  listWhatsappSessions,
   listRequests,
   listUsers,
   login,
   rejectRequest,
+  reopenWhatsappSession,
   logout,
   retryRequest,
   releaseTicketLogOperation,
@@ -303,6 +305,12 @@ function LegalPage({ kind }: { kind: LegalPageKind }) {
 
 function money(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function maskPhone(phoneE164: string | undefined) {
+  if (!phoneE164) return "n/d";
+  if (phoneE164.length <= 4) return "****";
+  return `${phoneE164.slice(0, Math.max(0, phoneE164.length - 4))}****`;
 }
 
 function ErrorBox({ error }: { error: string }) {
@@ -841,12 +849,18 @@ function HistoryPanel({ onSelectRequest }: { onSelectRequest: (requestId: string
 
 function OperationsPanel({ user }: { user: any }) {
   const [session, setSession] = useState<any>(null);
+  const [whatsappSessions, setWhatsappSessions] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
 
   async function refresh() {
     try {
-      setSession(await getTicketLogSessionStatus());
+      const [ticketlogSession, whatsapp] = await Promise.all([
+        getTicketLogSessionStatus(),
+        listWhatsappSessions(20),
+      ]);
+      setSession(ticketlogSession);
+      setWhatsappSessions(whatsapp.sessions ?? []);
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "TICKETLOG_SESSION_STATUS_FAILED");
@@ -903,6 +917,18 @@ function OperationsPanel({ user }: { user: any }) {
       setError("");
     } catch {
       setError("Nao foi possivel copiar a senha. Selecione o campo e copie manualmente.");
+    }
+  }
+
+  async function reopenConversation(phoneE164: string) {
+    setWorking(true);
+    try {
+      await reopenWhatsappSession(phoneE164);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "WHATSAPP_SESSION_REOPEN_FAILED");
+    } finally {
+      setWorking(false);
     }
   }
 
@@ -1047,6 +1073,43 @@ function OperationsPanel({ user }: { user: any }) {
             <span>A tela aparece aqui sem incorporar diretamente o dominio da Ticket Log.</span>
           </div>
         )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-title">
+          <h2>Sessoes WhatsApp</h2>
+          <span>Triagem e retomada</span>
+        </div>
+        <div className="timeline-list">
+          {whatsappSessions.length === 0 && (
+            <div className="timeline-row">
+              <strong>Nenhuma sessao recente</strong>
+              <span>Quando um supervisor ou coordenador falar com o bot, ela aparece aqui.</span>
+            </div>
+          )}
+          {whatsappSessions.map((item) => (
+            <div key={item.phoneE164} className="timeline-row session-row">
+              <strong>{maskPhone(item.phoneE164)} · {item.state}</strong>
+              <span>
+                {item.authenticatedUserName ?? "Nao autenticado"} · escopo {item.operationScope ?? "GERAL"}
+              </span>
+              <span>
+                Ultima interacao: {item.lastInteractionAt ? new Date(item.lastInteractionAt).toLocaleString("pt-BR") : "n/d"}
+              </span>
+              <span>
+                Solicitação ativa: {item.activeRequestId ?? "nenhuma"}
+              </span>
+              <div className="action-row">
+                {["EXPIRADO", "ERRO"].includes(item.state) && (
+                  <button type="button" className="secondary" onClick={() => reopenConversation(item.phoneE164)} disabled={working}>
+                    <RefreshCw size={18} />
+                    Reabrir conversa
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   );

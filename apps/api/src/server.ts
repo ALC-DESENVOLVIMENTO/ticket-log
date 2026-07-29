@@ -6,6 +6,7 @@ import { healthRoutes } from "./routes/health.js";
 import { operationRoutes } from "./routes/operations.js";
 import { requestRoutes } from "./routes/requests.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
+import { whatsappSessionRoutes } from "./routes/whatsappSessions.js";
 import { registerRawJsonParser } from "./rawJson.js";
 import { config } from "./config.js";
 
@@ -28,6 +29,7 @@ await app.register(requestRoutes);
 await app.register(operationRoutes);
 await app.register(approvalRoutes);
 await app.register(whatsappRoutes);
+await app.register(whatsappSessionRoutes);
 
 app.setErrorHandler((error, _request, reply) => {
   const statusCode = (error as any).statusCode ?? 500;

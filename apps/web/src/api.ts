@@ -192,6 +192,19 @@ export async function releaseTicketLogOperation() {
   });
 }
 
+export async function listWhatsappSessions(limit = 30) {
+  return jsonFetch(`/operations/whatsapp/sessions?limit=${limit}`, {
+    headers: devHeaders(),
+  });
+}
+
+export async function reopenWhatsappSession(phoneE164: string) {
+  return jsonFetch(`/operations/whatsapp/sessions/${encodeURIComponent(phoneE164)}/reopen`, {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}
+
 export async function listUsers() {
   return jsonFetch("/admin/users", {
     headers: devHeaders(),

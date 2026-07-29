@@ -77,6 +77,12 @@ export interface DbWhatsappSession {
   updated_at: Date;
 }
 
+export interface DbWhatsappSessionOverview extends DbWhatsappSession {
+  authenticated_user_name: string | null;
+  authenticated_user_email: string | null;
+  authenticated_user_scope: string | null;
+}
+
 export interface DbRequestNotification {
   id: string;
   request_id: string;
@@ -1106,6 +1112,76 @@ export async function getWhatsappSessionByPhone(phoneE164: string): Promise<DbWh
        from whatsapp_sessions
       where phone_e164 = $1`,
     [phoneE164],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function listWhatsappSessionsByScope(input: {
+  operationScope?: string;
+  includeScope: boolean;
+  authenticatedUserId?: string;
+  limit?: number;
+}): Promise<DbWhatsappSessionOverview[]> {
+  const boundedLimit = Math.max(1, Math.min(input.limit ?? 50, 100));
+
+  if (input.includeScope && input.operationScope) {
+    const result = await getPool().query<DbWhatsappSessionOverview>(
+      `select s.*,
+              u.name as authenticated_user_name,
+              u.corporate_email as authenticated_user_email,
+              u.operation_scope as authenticated_user_scope
+         from whatsapp_sessions s
+         left join users u on u.id = s.authenticated_user_id
+        where (
+          u.operation_scope = $1
+          or (u.id is null and coalesce(s.metadata->>'operationScope', 'GERAL') = $1)
+        )
+        order by s.updated_at desc
+        limit $2`,
+      [input.operationScope, boundedLimit],
+    );
+    return result.rows;
+  }
+
+  if (input.authenticatedUserId) {
+    const result = await getPool().query<DbWhatsappSessionOverview>(
+      `select s.*,
+              u.name as authenticated_user_name,
+              u.corporate_email as authenticated_user_email,
+              u.operation_scope as authenticated_user_scope
+         from whatsapp_sessions s
+         left join users u on u.id = s.authenticated_user_id
+        where s.authenticated_user_id = $1
+        order by s.updated_at desc
+        limit $2`,
+      [input.authenticatedUserId, boundedLimit],
+    );
+    return result.rows;
+  }
+
+  return [];
+}
+
+export async function reopenWhatsappSession(input: {
+  phoneE164: string;
+  expiresAt: Date;
+}): Promise<DbWhatsappSession | null> {
+  const result = await getPool().query<DbWhatsappSession>(
+    `update whatsapp_sessions
+        set state = 'AGUARDANDO_CPF',
+            active_request_id = null,
+            pending_vehicle_plate = null,
+            pending_amount_cents = null,
+            failed_cpf_attempts = 0,
+            failed_mfa_attempts = 0,
+            authentication_attempts = 0,
+            locked_until = null,
+            expires_at = $2,
+            last_interaction_at = now(),
+            updated_at = now()
+      where phone_e164 = $1
+      returning *`,
+    [input.phoneE164, input.expiresAt],
   );
   return result.rows[0] ?? null;
 }

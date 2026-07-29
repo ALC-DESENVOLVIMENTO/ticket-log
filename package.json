@@ -9,7 +9,7 @@
   "scripts": {
     "build": "npm run build -w @ticketlog/domain && npm run build -w @ticketlog/db && npm run build -w @ticketlog/queue && npm run build -w @ticketlog/whatsapp && npm run build -w @ticketlog/ticketlog && npm run build -w @ticketlog/api && npm run build -w @ticketlog/worker-playwright && npm run build -w @ticketlog/web",
     "build:api": "npm run build -w @ticketlog/domain && npm run build -w @ticketlog/db && npm run build -w @ticketlog/queue && npm run build -w @ticketlog/whatsapp && npm run build -w @ticketlog/ticketlog && npm run build -w @ticketlog/api",
-    "build:worker": "npm run build -w @ticketlog/domain && npm run build -w @ticketlog/db && npm run build -w @ticketlog/queue && npm run build -w @ticketlog/ticketlog && npm run build -w @ticketlog/worker-playwright",
+    "build:worker": "npm run build -w @ticketlog/domain && npm run build -w @ticketlog/db && npm run build -w @ticketlog/queue && npm run build -w @ticketlog/whatsapp && npm run build -w @ticketlog/ticketlog && npm run build -w @ticketlog/worker-playwright",
     "build:web": "npm run build -w @ticketlog/web",
     "provision:whatsapp-user": "node scripts/provision-whatsapp-user.mjs",
     "test:api": "npm run test -w @ticketlog/api",
