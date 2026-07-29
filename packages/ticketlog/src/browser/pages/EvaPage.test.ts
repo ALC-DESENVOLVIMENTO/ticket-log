@@ -60,3 +60,81 @@ test("opens EVA from a legacy frame and reaches the plate field", async () => {
     await browser.close();
   }
 });
+
+test("opens EVA when the panel is rendered in the same legacy frame", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<iframe id='legacy'></iframe>");
+    const legacyFrame = page.frames().find((frame) => frame !== page.mainFrame());
+    assert.ok(legacyFrame);
+
+    await legacyFrame.setContent(`
+      <button id="gea-gestor-eva-container">EVA</button>
+      <script>
+        document.querySelector("#gea-gestor-eva-container").addEventListener("click", () => {
+          document.body.insertAdjacentHTML("beforeend", \`
+            <section>
+              <p>Digite sobre o que deseja falar, ou selecione uma opcao:</p>
+              <button id="transactions" onclick="document.querySelector('#release').hidden = false">Transacoes</button>
+              <button id="release" hidden onclick="document.querySelector('#plate-form').hidden = false">Liberar abastecimento (restricao)</button>
+              <section id="plate-form" hidden>
+                <textarea aria-label="Placa"></textarea>
+                <button>Enviar</button>
+              </section>
+            </section>
+          \`);
+        });
+      </script>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(
+      await legacyFrame.getByRole("textbox").inputValue(),
+      "PWH4E85",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("dismisses blocking EVA prompts before opening the operational chat", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <button id="gea-gestor-eva-container">EVA</button>
+      <aside id="gea-gestor-eva-ativa-container" style="position:fixed;right:40px;bottom:40px;width:320px;height:240px">
+        <button id="button-x" style="position:absolute;right:4px;top:4px">x</button>
+        <p>Posso ajudar?</p>
+        <p>A fatura vence hoje. Pegue a sua fatura aqui.</p>
+      </aside>
+      <script>
+        document.querySelector("#button-x").addEventListener("click", () => document.querySelector("aside").remove());
+        document.querySelector("#gea-gestor-eva-container").addEventListener("click", () => {
+          document.body.insertAdjacentHTML("beforeend", \`
+            <section>
+              <p>Digite sobre o que deseja falar, ou selecione uma opcao:</p>
+              <button onclick="document.querySelector('#release').hidden = false">Transacoes</button>
+              <button id="release" hidden onclick="document.querySelector('#plate-form').hidden = false">Liberar abastecimento (restricao)</button>
+              <section id="plate-form" hidden>
+                <textarea aria-label="Placa"></textarea>
+                <button>Enviar</button>
+              </section>
+            </section>
+          \`);
+        });
+      </script>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(await page.locator("#gea-gestor-eva-ativa-container").count(), 0);
+    assert.equal(await page.getByRole("textbox").inputValue(), "PWH4E85");
+  } finally {
+    await browser.close();
+  }
+});

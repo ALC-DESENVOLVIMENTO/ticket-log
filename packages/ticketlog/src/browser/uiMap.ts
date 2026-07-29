@@ -13,11 +13,18 @@ export const ticketLogUi = {
   },
   eva: {
     launcherSelectors: [
+      "#gea-gestor-eva-container",
+      "#gea-gestor-eva-ativa-container",
+      "#ge-gestor-eva-container",
+      "#ge-gestor-eva-ativa-container",
       "#ge-fab",
       "#gea-fab",
       "#buttoneva",
       "#movebutton #ge-fab",
       "#ge-gestor-eva-container #ge-fab",
+      "#gea-gestor-eva-container #ge-fab",
+      "#gea-gestor-eva-container [role='button']",
+      "#gea-gestor-eva-ativa-container [role='button']",
       "button.eva-button",
       "button[aria-label*='EVA' i]",
       "button[title*='EVA' i]",
@@ -32,7 +39,17 @@ export const ticketLogUi = {
     ],
     frameHost: "eva-front.edenred.com.br",
     rootText:
-      /sou a eva|i am eva|digite sobre o que deseja falar|type what you want|digite aqui sua d.vida|type your question/i,
+      /sou a eva|i am eva|digite sobre o que deseja falar|type what you want|digite aqui sua d.vida|type your question|transa..es|transactions/i,
+    blockingPromptText:
+      /posso ajudar|transa..o foi negada|liberar restri..o|fatura.*vence hoje|pegue a sua fatura/i,
+    blockingPromptCloseSelectors: [
+      "#gea-gestor-eva-ativa-container #button-x:visible",
+      "#gea-gestor-eva-notificacoes-container #button-x-notificacao:visible",
+      "#notificacao-central-eva-container #button-nao:visible",
+      "#gea-gestor-eva-ativa-container #button-nao:visible",
+      "#button-x:visible",
+      "#button-x-notificacao:visible",
+    ],
     transactions: /^(?:transa..es|transactions)(?:\s|$)/i,
     releaseFuelRestriction:
       /liberar abastecimento.*restri|release fuel.*restrict/i,

@@ -6,29 +6,32 @@ import {
   ticketLogUi,
 } from "../uiMap.js";
 
+type EvaScope = Page | Frame;
+
 export class EvaPage {
   constructor(private readonly page: Page) {}
 
   async isAvailable(timeoutMs = 2_500): Promise<boolean> {
-    if (await this.getEvaFrame(250)) return true;
+    if (await this.getEvaSurface(250)) return true;
     return (await this.findEvaLauncher(timeoutMs)) !== null;
   }
 
   async open(): Promise<void> {
-    if (await this.getEvaFrame(500)) return;
+    if (await this.getEvaSurface(500)) return;
+    await this.dismissBlockingEvaPrompts();
 
     const evaButton = await this.findEvaLauncher(8_000);
     if (!evaButton) {
       throw new ManualInterventionError("EVA_BUTTON_NOT_FOUND");
     }
 
-    await evaButton.click({ force: true });
-    console.info("ticketlog.eva:launcher-clicked");
-    if (await this.getEvaFrame(5_000)) return;
+    await this.clickEvaLauncher(evaButton);
+    if (await this.getEvaSurface(8_000)) return;
 
-    // Some legacy pages bind the chat opening action to a double click.
-    await evaButton.dblclick({ force: true }).catch(() => undefined);
-    if (!(await this.getEvaFrame(8_000))) {
+    await this.dismissBlockingEvaPrompts();
+    await this.clickEvaLauncher(evaButton, true);
+    if (!(await this.getEvaSurface(12_000))) {
+      await this.logEvaOpenDiagnostics();
       throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
     }
   }
@@ -77,7 +80,7 @@ export class EvaPage {
 
   private async openReleaseFuelRestrictionFlow(): Promise<Frame> {
     await this.open();
-    const frame = await this.requireEvaFrame();
+    const frame = await this.requireEvaSurface();
 
     await this.clickEvaOption(frame, ticketLogUi.eva.transactions);
     await this.clickEvaOption(frame, ticketLogUi.eva.releaseFuelRestriction);
@@ -95,13 +98,13 @@ export class EvaPage {
     await this.page.waitForTimeout(200);
   }
 
-  private async requireEvaFrame(): Promise<Frame> {
-    const frame = await this.getEvaFrame();
+  private async requireEvaSurface(): Promise<Frame> {
+    const frame = await this.getEvaSurface();
     if (!frame) throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
     return frame;
   }
 
-  private async getEvaFrame(timeoutMs = 10_000): Promise<Frame | null> {
+  private async getEvaSurface(timeoutMs = 10_000): Promise<Frame | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       for (const frame of this.page.frames()) {
@@ -131,6 +134,10 @@ export class EvaPage {
     const deadline = Date.now() + timeoutMs;
     do {
       for (const scope of [this.page, ...this.page.frames()]) {
+        if (await this.scopeHasEvaPanel(scope)) {
+          continue;
+        }
+
         const candidates = [
           ...ticketLogUi.eva.launcherSelectors.map((selector) =>
             scope.locator(selector).first(),
@@ -138,9 +145,15 @@ export class EvaPage {
           scope
             .getByRole("button", { name: ticketLogUi.eva.launcherRole })
             .first(),
-          ...ticketLogUi.eva.launcherImageSelectors.map((selector) =>
+          ...ticketLogUi.eva.launcherImageSelectors.flatMap((selector) => [
+            scope
+              .locator(selector)
+              .first()
+              .locator(
+                "xpath=ancestor-or-self::*[self::button or self::a or @role='button' or contains(@id,'eva') or contains(@id,'Eva') or contains(@class,'eva') or contains(@class,'Eva')][1]",
+              ),
             scope.locator(selector).first(),
-          ),
+          ]),
         ];
 
         for (const candidate of candidates) {
@@ -152,6 +165,164 @@ export class EvaPage {
     } while (Date.now() < deadline);
 
     return null;
+  }
+
+  private async scopeHasEvaPanel(scope: EvaScope): Promise<boolean> {
+    const body = await scope.locator("body").innerText({ timeout: 750 }).catch(() => "");
+    return isEvaFrameCandidate(scope === this.page ? this.page.url() : (scope as Frame).url(), body);
+  }
+
+  private async clickEvaLauncher(locator: Locator, doubleClick = false): Promise<void> {
+    await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+    if (doubleClick) {
+      await locator.dblclick({ force: true }).catch(async () => {
+        const box = await locator.boundingBox();
+        if (!box) return;
+        await this.page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+      });
+      console.info("ticketlog.eva:launcher-double-clicked");
+      return;
+    }
+
+    await locator.click({ force: true }).catch(async () => {
+      const box = await locator.boundingBox();
+      if (!box) throw new ManualInterventionError("EVA_BUTTON_NOT_CLICKABLE");
+      await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    });
+    console.info("ticketlog.eva:launcher-clicked");
+  }
+
+  private async dismissBlockingEvaPrompts(): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const closed = await this.closeOneBlockingEvaPrompt();
+      if (!closed) return;
+      await this.page.waitForTimeout(250);
+    }
+  }
+
+  private async closeOneBlockingEvaPrompt(): Promise<boolean> {
+    for (const scope of [this.page, ...this.page.frames()]) {
+      for (const selector of ticketLogUi.eva.blockingPromptCloseSelectors) {
+        const closeControl = scope.locator(selector).first();
+        if (await closeControl.isVisible().catch(() => false)) {
+          await closeControl.click({ force: true }).catch(() => undefined);
+          console.info({ selector }, "ticketlog.eva:blocking-prompt-closed");
+          return true;
+        }
+      }
+
+      const result = await scope
+        .locator("body")
+        .evaluate((body, promptPatternSource) => {
+          const normalize = (value: string) =>
+            value
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim();
+          const promptPattern = new RegExp(promptPatternSource, "i");
+          const elements = Array.from(
+            body.querySelectorAll<HTMLElement>("div, section, article, aside, [role='dialog']"),
+          );
+          const popups = elements
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              const text = normalize(node.innerText ?? node.textContent ?? "");
+              return { node, rect, text, area: rect.width * rect.height };
+            })
+            .filter(
+              ({ rect, text }) =>
+                promptPattern.test(text) &&
+                rect.width >= 220 &&
+                rect.height >= 120 &&
+                rect.bottom > 0 &&
+                rect.right > 0 &&
+                rect.top < window.innerHeight &&
+                rect.left < window.innerWidth,
+            )
+            .sort((left, right) => left.area - right.area);
+          if (popups.length === 0) return false;
+
+          for (const { node: popup, rect: popupRect } of popups) {
+            const controls = Array.from(
+              popup.querySelectorAll<HTMLElement>("button, [role='button'], a, div, span, svg"),
+            )
+              .map((control) => {
+                const rect = control.getBoundingClientRect();
+                const text = normalize(control.innerText ?? control.textContent ?? "");
+                const metadata = normalize(
+                  `${control.getAttribute("aria-label") ?? ""} ${control.getAttribute("title") ?? ""} ${control.className?.toString() ?? ""}`,
+                );
+                const style = window.getComputedStyle(control);
+                const explicitClose =
+                  /fechar|close|dismiss/.test(metadata) || /^(?:x|×)$/.test(text);
+                const topRightControl =
+                  rect.width >= 10 &&
+                  rect.width <= 80 &&
+                  rect.height >= 10 &&
+                  rect.height <= 80 &&
+                  rect.left >= popupRect.right - 110 &&
+                  rect.right <= popupRect.right + 30 &&
+                  rect.top >= popupRect.top - 35 &&
+                  rect.top <= popupRect.top + 110 &&
+                  !/liberar restricao|pegue a sua fatura|mais informacoes/.test(text) &&
+                  (control.tagName === "BUTTON" ||
+                    control.getAttribute("role") === "button" ||
+                    style.cursor === "pointer" ||
+                    Boolean(control.querySelector("svg")));
+                return { control, rect, explicitClose, topRightControl };
+              })
+              .filter(({ explicitClose, topRightControl }) => explicitClose || topRightControl)
+              .sort((left, right) => {
+                if (left.explicitClose !== right.explicitClose) return left.explicitClose ? -1 : 1;
+                return right.rect.right - left.rect.right || left.rect.top - right.rect.top;
+              });
+            const target = controls[0]?.control;
+            if (!target) continue;
+            target.click();
+            return true;
+          }
+
+          return false;
+        }, ticketLogUi.eva.blockingPromptText.source)
+        .catch(() => false);
+      if (result) {
+        console.info("ticketlog.eva:blocking-prompt-closed");
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async logEvaOpenDiagnostics(): Promise<void> {
+    const frames = await Promise.all(
+      this.page.frames().map(async (frame) => ({
+        url: frame.url().slice(0, 180),
+        text: (await frame.locator("body").innerText({ timeout: 500 }).catch(() => "")).slice(0, 180),
+      })),
+    );
+    const launcherCount = await this.countVisibleLaunchers().catch(() => -1);
+    console.warn({ url: this.page.url(), launcherCount, frames }, "ticketlog.eva:open-diagnostics");
+  }
+
+  private async countVisibleLaunchers(): Promise<number> {
+    let count = 0;
+    for (const scope of [this.page, ...this.page.frames()]) {
+      for (const selector of [
+        ...ticketLogUi.eva.launcherSelectors,
+        ...ticketLogUi.eva.launcherImageSelectors,
+      ]) {
+        count += await scope.locator(selector).evaluateAll((nodes) =>
+          nodes.filter((node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }).length,
+        ).catch(() => 0);
+      }
+    }
+    return count;
   }
 
   private async waitForVisible(candidates: Locator[], timeoutMs = 20_000): Promise<Locator> {
