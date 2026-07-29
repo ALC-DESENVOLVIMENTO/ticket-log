@@ -13,11 +13,16 @@ export class FleetVehiclePage {
       return;
     }
 
-    const navigatedThroughUi = await this.clickVehicleListEntrypoint(5_000)
+    const stationMode = process.env.TICKETLOG_STATION_MODE === "true";
+    const navigatedThroughUi = await this.navigateToVehicleListThroughUi()
       .then(() => true)
       .catch(() => false);
-    if (navigatedThroughUi && (await this.waitForVehicleListReady(15_000))) {
+    if (navigatedThroughUi && (await this.waitForVehicleListReady(30_000))) {
       return;
+    }
+
+    if (stationMode) {
+      throw new ManualInterventionError("VEHICLE_LIST_UI_NAVIGATION_FAILED");
     }
 
     if (!/\/register\/fleet\/vehicle\/list(?:$|[?#])/i.test(this.page.url())) {
@@ -28,6 +33,16 @@ export class FleetVehiclePage {
 
     if (!(await this.waitForVehicleListReady())) {
       throw new ManualInterventionError("VEHICLE_LIST_NOT_LOADED");
+    }
+  }
+
+  async gotoHome(): Promise<void> {
+    await this.dismissBlockingOverlays();
+    if (await this.waitForHomeReady(1_500)) return;
+
+    await this.clickHomeEntrypoint();
+    if (!(await this.waitForHomeReady(30_000))) {
+      throw new ManualInterventionError("HOME_UI_NAVIGATION_FAILED");
     }
   }
 
@@ -378,25 +393,82 @@ export class FleetVehiclePage {
     return false;
   }
 
-  private async clickVehicleListEntrypoint(timeoutMs = 30_000): Promise<void> {
+  private async navigateToVehicleListThroughUi(): Promise<void> {
+    await this.gotoHome();
+    console.info({ url: this.page.url() }, "ticketlog.navigation:home-ui");
+    await this.clickVehicleListEntrypoint();
+    console.info({ url: this.page.url() }, "ticketlog.navigation:vehicle-quick-access");
+  }
+
+  private async clickHomeEntrypoint(timeoutMs = 20_000): Promise<void> {
+    const homeEntry = await this.findVisible(
+      [
+        this.page.getByRole("link", { name: /^\s*(?:in.cio|home)\s*$/i }).first(),
+        this.page.getByRole("button", { name: /^\s*(?:in.cio|home)\s*$/i }).first(),
+        this.page.getByText(/^\s*(?:in.cio|home)\s*$/i).first(),
+        this.page.locator("a[href$='/home'], a[href*='/home?']").first(),
+      ],
+      "HOME_ENTRYPOINT_NOT_FOUND",
+      timeoutMs,
+    );
+
+    await this.clickEntrypointCard(homeEntry, "HOME_ENTRYPOINT_NOT_CLICKABLE");
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+  }
+
+  private async waitForHomeReady(timeoutMs = 20_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await this.dismissBlockingOverlays();
+      if (await this.page.getByText(/acesso r.pido|quick access/i).first().isVisible().catch(() => false)) return true;
+
+      const onHomeUrl = /plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(this.page.url());
+      const vehicleCardVisible = await this.page
+        .getByText(/^\s*(?:ve.culo|vehicle)\s*$/i)
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (onHomeUrl && vehicleCardVisible) return true;
+
+      await this.page.waitForTimeout(400);
+    }
+
+    return false;
+  }
+
+  private async clickVehicleListEntrypoint(timeoutMs = 20_000): Promise<void> {
+    const quickAccess = this.page
+      .getByText(/acesso r.pido|quick access/i)
+      .first()
+      .locator("xpath=following::*[1]");
     const entrypoint = await this.findVisible(
       [
+        quickAccess.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
         this.page.getByText(/^\s*(?:ve.culo|vehicle)\s*$/i).first(),
-        this.page.getByText(/^\s*(?:equipamento|equipment)\s*$/i).first(),
-        this.page.getByRole("link", { name: /ve.culo|vehicle|equipamento|equipment/i }).first(),
-        this.page.getByRole("button", { name: /ve.culo|vehicle|equipamento|equipment/i }).first(),
+        this.page.getByRole("link", { name: /^\s*(?:ve.culo|vehicle)\s*$/i }).first(),
+        this.page.getByRole("button", { name: /^\s*(?:ve.culo|vehicle)\s*$/i }).first(),
       ],
       "VEHICLE_LIST_ENTRYPOINT_NOT_FOUND",
       timeoutMs,
     );
 
+    await this.clickEntrypointCard(entrypoint, "VEHICLE_LIST_ENTRYPOINT_NOT_CLICKABLE");
+    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+  }
+
+  private async clickEntrypointCard(entrypoint: Locator, errorCode: string): Promise<void> {
+    await this.dismissBlockingOverlays();
     await entrypoint.scrollIntoViewIfNeeded().catch(() => undefined);
-    await entrypoint.click().catch(async () => {
-      const box = await entrypoint.boundingBox();
-      if (!box) throw new ManualInterventionError("VEHICLE_LIST_ENTRYPOINT_NOT_CLICKABLE");
+    const clickableCard = entrypoint.locator(
+      "xpath=ancestor::*[self::button or self::a or @role='button' or contains(@class,'card') or contains(@class,'Card')][1]",
+    );
+    const target = (await clickableCard.isVisible().catch(() => false)) ? clickableCard : entrypoint;
+
+    await target.click().catch(async () => {
+      const box = await target.boundingBox();
+      if (!box) throw new ManualInterventionError(errorCode);
       await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     });
-    await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
   }
 
   private async clickAndConfirmChangeLimit(locator: Locator): Promise<boolean> {
@@ -527,90 +599,136 @@ export class FleetVehiclePage {
   }
 
   private async closeEvaSuggestionPopup(): Promise<void> {
-    const scopes: Array<Page | Frame> = [this.page, ...this.page.frames()];
-    for (const scope of scopes) {
-      const releaseAction = scope.getByText(/liberar restri..o/i).last();
-      if (!(await releaseAction.isVisible().catch(() => false))) continue;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let foundPopup = false;
+      let closedPopup = false;
 
-      await releaseAction
-        .evaluate((element) => {
-          const normalize = (value: string) =>
-            value
-              .normalize("NFD")
-              .replace(/[\u0300-\u036f]/g, "")
-              .toLowerCase();
-          let current: HTMLElement | null = element instanceof HTMLElement ? element : element.parentElement;
-          let popup: HTMLElement | null = null;
-
-          while (current) {
-            const rect = current.getBoundingClientRect();
-            const text = normalize(current.innerText ?? current.textContent ?? "");
-            if (
-              text.includes("posso ajudar") &&
-              text.includes("liberar restricao") &&
-              rect.width >= 220 &&
-              rect.width <= 700 &&
-              rect.height >= 180 &&
-              rect.height <= 850
-            ) {
-              popup = current;
-              break;
-            }
-            current = current.parentElement;
-          }
-
-          if (!popup) return false;
-          const popupRect = popup.getBoundingClientRect();
-          const candidates = Array.from(
-            popup.querySelectorAll<HTMLElement>("button, [role='button'], a, div, span, svg"),
+      for (const scope of [this.page, ...this.page.frames()]) {
+        const stableCloseControl = scope
+          .locator(
+            [
+              "#gea-gestor-eva-ativa-container #button-x:visible",
+              "#gea-gestor-eva-notificacoes-container #button-x-notificacao:visible",
+              "#notificacao-central-eva-container #button-nao:visible",
+              "#gea-gestor-eva-ativa-container #button-nao:visible",
+            ].join(", "),
           )
-            .map((node) => {
-              const rect = node.getBoundingClientRect();
-              const text = normalize(node.innerText ?? node.textContent ?? "");
-              const metadata = normalize(
-                `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""} ${node.className?.toString() ?? ""}`,
-              );
-              const style = window.getComputedStyle(node);
-              const explicitClose = /fechar|close|dismiss/.test(metadata);
-              const topRightControl =
-                rect.width >= 12 &&
-                rect.width <= 72 &&
-                rect.height >= 12 &&
-                rect.height <= 72 &&
-                rect.right >= popupRect.right - 90 &&
-                rect.top <= popupRect.top + 90 &&
-                !text.includes("liberar restricao") &&
-                (node.tagName === "BUTTON" ||
-                  node.getAttribute("role") === "button" ||
-                  style.cursor === "pointer" ||
-                  Boolean(node.querySelector("svg")));
-              return { node, rect, explicitClose, topRightControl };
-            })
-            .filter((candidate) => candidate.explicitClose || candidate.topRightControl)
-            .sort((left, right) => {
-              if (left.explicitClose !== right.explicitClose) return left.explicitClose ? -1 : 1;
-              return right.rect.right - left.rect.right || left.rect.top - right.rect.top;
-            });
+          .first();
+        if (await stableCloseControl.isVisible().catch(() => false)) {
+          await stableCloseControl.click({ force: true });
+          console.info({ kind: "stable-control" }, "ticketlog.overlay:eva-suggestion-closed");
+          foundPopup = true;
+          closedPopup = true;
+          break;
+        }
 
-          const target = candidates[0]?.node;
-          if (target) {
-            target.click();
-            return true;
-          }
+        const result = await scope
+          .locator("body")
+          .evaluate((body) => {
+            const normalize = (value: string) =>
+              value
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .toLowerCase()
+                .replace(/\s+/g, " ")
+                .trim();
+            const isEvaSuggestion = (text: string) =>
+              text.includes("posso ajudar") ||
+              (text.includes("transacao foi negada") && text.includes("liberar restricao")) ||
+              (text.includes("fatura") && (text.includes("pegue a sua fatura") || text.includes("vence hoje")));
+            const elements = Array.from(
+              body.querySelectorAll<HTMLElement>("div, section, article, aside, [role='dialog']"),
+            );
+            const popups = elements
+              .map((node) => {
+                const rect = node.getBoundingClientRect();
+                const text = normalize(node.innerText ?? node.textContent ?? "");
+                return { node, rect, text, area: rect.width * rect.height };
+              })
+              .filter(
+                ({ rect, text }) =>
+                  isEvaSuggestion(text) &&
+                  rect.width >= 220 &&
+                  rect.width <= 750 &&
+                  rect.height >= 140 &&
+                  rect.height <= 850 &&
+                  rect.bottom > 0 &&
+                  rect.right > 0 &&
+                  rect.top < window.innerHeight &&
+                  rect.left < window.innerWidth,
+              )
+              .sort((left, right) => left.area - right.area);
 
-          const pointTarget = document.elementFromPoint(popupRect.right - 16, popupRect.top + 16);
-          const clickable = pointTarget?.closest<HTMLElement>("button, [role='button'], a, div, span");
-          if (!clickable) return false;
-          clickable.click();
-          return true;
-        })
-        .catch(() => false);
+            if (popups.length === 0) return { found: false, closed: false, kind: "none" };
 
-      await this.page.waitForTimeout(300);
-      if (await releaseAction.isVisible().catch(() => false)) {
+            for (const { node: popup, rect: popupRect, text: popupText } of popups) {
+              const kind = popupText.includes("fatura") ? "invoice" : "restriction";
+              const controls = Array.from(
+                popup.querySelectorAll<HTMLElement>("button, [role='button'], a, div, span, svg"),
+              )
+                .map((node) => {
+                  const rect = node.getBoundingClientRect();
+                  const text = normalize(node.innerText ?? node.textContent ?? "");
+                  const metadata = normalize(
+                    `${node.getAttribute("aria-label") ?? ""} ${node.getAttribute("title") ?? ""} ${node.className?.toString() ?? ""}`,
+                  );
+                  const style = window.getComputedStyle(node);
+                  const explicitClose =
+                    /fechar|close|dismiss/.test(metadata) || /^(?:x|\u00d7)$/.test(text);
+                  const topRightControl =
+                    rect.width >= 12 &&
+                    rect.width <= 72 &&
+                    rect.height >= 12 &&
+                    rect.height <= 72 &&
+                    rect.left >= popupRect.right - 96 &&
+                    rect.right <= popupRect.right + 24 &&
+                    rect.top >= popupRect.top - 24 &&
+                    rect.top <= popupRect.top + 96 &&
+                    !/liberar restricao|pegue a sua fatura|mais informacoes/.test(text) &&
+                    (node.tagName === "BUTTON" ||
+                      node.getAttribute("role") === "button" ||
+                      style.cursor === "pointer" ||
+                      Boolean(node.querySelector("svg")));
+                  return { node, rect, explicitClose, topRightControl };
+                })
+                .filter(({ explicitClose, topRightControl }) => explicitClose || topRightControl)
+                .sort((left, right) => {
+                  if (left.explicitClose !== right.explicitClose) return left.explicitClose ? -1 : 1;
+                  return right.rect.right - left.rect.right || left.rect.top - right.rect.top;
+                });
+
+              const target = controls[0]?.node;
+              if (!target) continue;
+              target.click();
+              return { found: true, closed: true, kind };
+            }
+
+            return {
+              found: true,
+              closed: false,
+              kind: popups[0]?.text.includes("fatura") ? "invoice" : "restriction",
+            };
+          })
+          .catch(() => ({ found: false, closed: false, kind: "unknown" }));
+
+        if (!result.found) continue;
+        foundPopup = true;
+        closedPopup = result.closed;
+        if (closedPopup) {
+          console.info({ kind: result.kind }, "ticketlog.overlay:eva-suggestion-closed");
+        }
+        break;
+      }
+
+      if (!foundPopup) return;
+      if (!closedPopup) {
         throw new ManualInterventionError("EVA_SUGGESTION_POPUP_NOT_DISMISSED");
       }
+
+      await this.page.waitForTimeout(350);
     }
+
+    throw new ManualInterventionError("EVA_SUGGESTION_POPUP_REOPENED_REPEATEDLY");
   }
 
   private async closeChromiumRestoreBubble(): Promise<void> {

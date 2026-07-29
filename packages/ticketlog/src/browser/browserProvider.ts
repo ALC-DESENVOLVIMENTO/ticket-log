@@ -315,22 +315,18 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
   private async openEvaHostPage(page: Page): Promise<void> {
     const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
+    const fleet = new FleetVehiclePage(page);
 
-    if (/plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(page.url())) {
+    if (process.env.TICKETLOG_STATION_MODE === "true") {
+      await fleet.gotoHome();
       return;
     }
 
-    const homeEntry = page
-      .getByRole("link", { name: /in.cio|home/i })
-      .or(page.getByText(/^\s*(?:in.cio|home)\s*$/i))
-      .first();
-    if (await homeEntry.isVisible().catch(() => false)) {
-      await homeEntry.click().catch(() => undefined);
-      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-      if (/plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(page.url())) {
-        return;
-      }
-    }
+    const navigatedThroughUi = await fleet
+      .gotoHome()
+      .then(() => true)
+      .catch(() => false);
+    if (navigatedThroughUi) return;
 
     await page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -422,8 +418,8 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await userField.fill(safeUsername);
       await passwordField.fill(safePassword);
       await page.getByRole("button", { name: /entrar|acessar|login/i }).click();
-      await page.goto(process.env.TICKETLOG_VEHICLE_LIST_URL ?? "https://plataforma.ticketlog.com.br/register/fleet/vehicle/list");
       await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await this.waitForPostLoginNavigation(page);
       if (allowManualLogin && (await this.requiresHumanChallenge(page))) {
         await this.emit({
           status: "AUTH_REQUIRED",
@@ -446,6 +442,16 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       throw new ManualInterventionError("TICKETLOG_SESSION_NOT_AUTHENTICATED");
     }
     await this.emit({ status: "SESSION_READY", currentUrl: page.url(), message: "Sessao autenticada" });
+  }
+
+  private async waitForPostLoginNavigation(page: Page, timeoutMs = 30_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if ((await this.isAuthenticatedPlatformPage(page)) || (await this.requiresHumanChallenge(page))) {
+        return;
+      }
+      await page.waitForTimeout(500);
+    }
   }
 
   private async isAuthenticatedPlatformPage(page: Page): Promise<boolean> {
