@@ -1,6 +1,7 @@
 import {
   buildRequestIdempotencyKey,
   evaluateLimitPolicy,
+  formatRequestProtocol,
   isValidBrazilianPlate,
   isValidCpf,
   maskCpf,
@@ -323,7 +324,7 @@ async function notifyCoordinatorApprovalNeeded(input: {
       requestId: input.request.id,
       body: [
         "Solicitacao pendente de aprovacao.",
-        `Protocolo: ${input.request.id}`,
+        `Protocolo: ${formatRequestProtocol(input.request.id)}`,
         `Solicitante: ${input.requester.name}`,
         `Placa: ${input.plate}`,
         `Valor solicitado: ${formatCurrency(input.requestedAmount)}`,
@@ -360,6 +361,9 @@ async function resetSession(
 function buildNextActionBody(status: string): string {
   if (status === "CONCLUIDA") {
     return "Se quiser, podemos abrir uma nova solicitacao agora ou encerrar o atendimento.";
+  }
+  if (status === "LIMITE_ALTERADO") {
+    return "O limite ja foi alterado e a liberacao complementar segue em tratativa. Posso consultar o status ou encerrar o atendimento.";
   }
   if (["RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(status)) {
     return "A solicitacao anterior nao foi concluida com seguranca. Voce pode consultar o status, iniciar uma nova solicitacao ou encerrar.";
@@ -1065,13 +1069,13 @@ export class WhatsappFlowService {
           recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
           toPhoneE164: input.phoneE164,
           requestId: request.id,
-          body: [
-            "Solicitacao registrada e aguardando aprovacao do coordenador.",
-            `Placa: ${pendingFromSession.plate}`,
-            `Valor solicitado: ${formatCurrency(amount)}`,
-            `Protocolo: ${request.id}`,
-            "Vou avisar por aqui assim que houver aprovacao ou rejeicao.",
-          ].join("\n"),
+        body: [
+          "Solicitacao registrada e aguardando aprovacao do coordenador.",
+          `Placa: ${pendingFromSession.plate}`,
+          `Valor solicitado: ${formatCurrency(amount)}`,
+          `Protocolo: ${formatRequestProtocol(request.id)}`,
+          "Vou avisar por aqui assim que houver aprovacao ou rejeicao.",
+        ].join("\n"),
           replyToMessageId: input.providerMessageId,
         });
         return;
@@ -1102,7 +1106,7 @@ export class WhatsappFlowService {
           "Solicitacao recebida e em processamento.",
           `Placa: ${pendingFromSession.plate}`,
           `Valor solicitado: ${formatCurrency(amount)}`,
-          `Protocolo: ${request.id}`,
+          `Protocolo: ${formatRequestProtocol(request.id)}`,
           "Assim que a Ticket Log responder, eu aviso por aqui.",
         ].join("\n"),
         replyToMessageId: input.providerMessageId,
@@ -1336,7 +1340,7 @@ export class WhatsappFlowService {
     }
 
     const statusBody = [
-      `Protocolo: ${request.id}`,
+      `Protocolo: ${formatRequestProtocol(request.id)}`,
       `Status atual: ${request.status}`,
       `Placa: ${request.vehicle_plate}`,
       `Valor solicitado: ${formatCurrency(request.requested_amount)}`,
@@ -1378,14 +1382,24 @@ export async function notifyWhatsappRequestResolved(input: {
           previousLimit: context.request.previous_limit === null ? null : Number(context.request.previous_limit),
           newLimit: context.request.new_limit === null ? null : Number(context.request.new_limit),
           executedAt: new Date(),
-          protocol: context.request.id,
+          protocol: formatRequestProtocol(context.request.id),
         })
-      : [
-          "Nao foi possivel concluir a alteracao neste momento.",
-          "Entre em contato novamente daqui a 30 minutos.",
-          `Protocolo: ${context.request.id}`,
-          `Placa: ${context.request.vehicle_plate}`,
-        ].join("\n");
+      : context.steps.some((step) => step.step_key === "CHANGE_LIMIT" && step.status === "DONE") &&
+          context.steps.some((step) => step.step_key === "EVA_RELEASE" && step.status === "FAILED")
+        ? [
+            "O limite foi alterado com sucesso, mas a liberacao complementar ainda nao foi concluida.",
+            `Placa: ${context.request.vehicle_plate}`,
+            `Limite anterior: ${formatCurrency(context.request.previous_limit)}`,
+            `Novo limite: ${formatCurrency(context.request.new_limit)}`,
+            "Nossa equipe vai continuar a tratativa operacional.",
+            `Protocolo: ${formatRequestProtocol(context.request.id)}`,
+          ].join("\n")
+        : [
+            "Nao foi possivel concluir a alteracao neste momento.",
+            "Entre em contato novamente daqui a 30 minutos.",
+            `Protocolo: ${formatRequestProtocol(context.request.id)}`,
+            `Placa: ${context.request.vehicle_plate}`,
+          ].join("\n");
 
   await sendGuidedMessage({
     provider: input.provider,

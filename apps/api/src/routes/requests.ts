@@ -16,6 +16,7 @@ import {
   getPool,
   getRequest,
   getRequestVisibleToUser,
+  resolveRequestLookupId,
   getUserContext,
   listRequestsVisibleToUser,
   transitionRequest,
@@ -38,6 +39,10 @@ function expiresAt(): Date {
 function currentBucket(): string {
   const now = new Date();
   return now.toISOString().slice(0, 13);
+}
+
+async function resolveRequestParamId(rawId: string): Promise<string | null> {
+  return resolveRequestLookupId(rawId);
 }
 
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
@@ -128,11 +133,13 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
+    const resolvedId = await resolveRequestParamId(params.id);
+    if (!resolvedId) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     const access = resolveAccessProfile(user);
     const found = access.isAdmin
-      ? await getRequest(params.id)
+      ? await getRequest(resolvedId)
       : await getRequestVisibleToUser({
-          requestId: params.id,
+          requestId: resolvedId,
           userId: user.id,
           includeScope: access.canViewScopeRequests,
           operationScope: user.operation_scope,
@@ -146,11 +153,13 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
+    const resolvedId = await resolveRequestParamId(params.id);
+    if (!resolvedId) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     const access = resolveAccessProfile(user);
     const found = access.isAdmin
-      ? await getRequest(params.id)
+      ? await getRequest(resolvedId)
       : await getRequestVisibleToUser({
-          requestId: params.id,
+          requestId: resolvedId,
           userId: user.id,
           includeScope: access.canViewScopeRequests,
           operationScope: user.operation_scope,
@@ -162,7 +171,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
            from automation_steps
           where request_id = $1
           order by started_at nulls first, step_key`,
-        [params.id],
+        [resolvedId],
       ),
       getPool().query(
         `select event_type, created_at
@@ -170,7 +179,7 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
           where request_id = $1
           order by created_at desc
           limit 30`,
-        [params.id],
+        [resolvedId],
       ),
     ]);
     const steps = stepsResult.rows;
@@ -183,7 +192,9 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
-    const found = await getRequest(params.id);
+    const resolvedId = await resolveRequestParamId(params.id);
+    if (!resolvedId) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
+    const found = await getRequest(resolvedId);
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     if (found.requester_id !== user.id) {
       return reply.code(403).send({ error: "APPROVAL_LINK_NOT_ALLOWED" });
@@ -213,20 +224,22 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
+    const resolvedId = await resolveRequestParamId(params.id);
+    if (!resolvedId) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     const access = resolveAccessProfile(user);
     const found = access.isAdmin
-      ? await getRequest(params.id)
+      ? await getRequest(resolvedId)
       : await getRequestVisibleToUser({
-          requestId: params.id,
+          requestId: resolvedId,
           userId: user.id,
           includeScope: access.canViewScopeRequests,
           operationScope: user.operation_scope,
         });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
-    if (!["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"].includes(found.status)) {
+    if (!["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL", "LIMITE_ALTERADO"].includes(found.status)) {
       return reply.code(409).send({ error: "REQUEST_NOT_RETRYABLE" });
     }
-    if (found.status !== "NA_FILA") {
+    if (!["NA_FILA", "LIMITE_ALTERADO"].includes(found.status)) {
       await transitionRequest(found.id, "NA_FILA");
     }
     const queue = await enqueueIfConfigured(found.id);

@@ -34,8 +34,8 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
   if (!request) throw new Error("REQUEST_NOT_FOUND");
 
   const allowedStatuses = options.allowManualStart
-    ? ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"]
-    : ["NA_FILA", "FALHA_REPROCESSAVEL"];
+    ? ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL", "LIMITE_ALTERADO"]
+    : ["NA_FILA", "FALHA_REPROCESSAVEL", "LIMITE_ALTERADO"];
 
   if (!allowedStatuses.includes(request.status)) {
     await appendAuditEvent({
@@ -72,8 +72,14 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       });
       await transitionRequest(requestId, "NA_FILA");
     }
-    await transitionRequest(requestId, "EM_PROCESSAMENTO");
-    console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
+    if (request.status !== "LIMITE_ALTERADO") {
+      await transitionRequest(requestId, "EM_PROCESSAMENTO");
+      console.info({ requestId, status: "EM_PROCESSAMENTO" }, "processLimitRequest:state-transition");
+    } else {
+      currentStep = "EVA_RELEASE";
+      await updateOperationalRuntime({ currentStep, statusMessage: "Retomando liberacao pela EVA" });
+      console.info({ requestId, status: "LIMITE_ALTERADO" }, "processLimitRequest:resume-from-limit-changed");
+    }
     const provider = createTicketLogProvider({
       onOperationalEvent: handleTicketLogOperationalEvent,
       onPreviousLimitRead: ({ requestId: readRequestId, previousLimit }) =>
@@ -208,7 +214,8 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       },
       "processLimitRequest:error",
     );
-    const shouldRetry = await classifyFailure(requestId, error, currentStep);
+    const changeLimitCompleted = await hasCompletedStep(requestId, "CHANGE_LIMIT").catch(() => false);
+    const shouldRetry = await classifyFailure(requestId, error, currentStep, changeLimitCompleted);
     if (!shouldRetry) {
       await notifyWhatsappResolvedRequest(requestId).catch(() => undefined);
     }
@@ -239,22 +246,35 @@ function isAuthenticationIntervention(error: unknown): boolean {
   ].includes(error.code);
 }
 
-async function classifyFailure(requestId: string, error: unknown, stepKey: AutomationStepKey): Promise<boolean> {
+async function classifyFailure(
+  requestId: string,
+  error: unknown,
+  stepKey: AutomationStepKey,
+  changeLimitCompleted: boolean,
+): Promise<boolean> {
+  const keepLimitChangedState = stepKey === "EVA_RELEASE" && changeLimitCompleted;
+
   if (error instanceof ManualInterventionError) {
     await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
-    await transitionRequest(requestId, "FALHA_MANUAL").catch(() => undefined);
+    if (!keepLimitChangedState) {
+      await transitionRequest(requestId, "FALHA_MANUAL").catch(() => undefined);
+    }
     return false;
   }
 
   if (error instanceof IndeterminateResultError) {
     await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.message });
-    await transitionRequest(requestId, "RESULTADO_INDETERMINADO").catch(() => undefined);
+    if (!keepLimitChangedState) {
+      await transitionRequest(requestId, "RESULTADO_INDETERMINADO").catch(() => undefined);
+    }
     return false;
   }
 
   if (error instanceof ReprocessableAutomationError) {
     await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
-    await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+    if (!keepLimitChangedState) {
+      await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+    }
     return true;
   }
 
@@ -263,6 +283,8 @@ async function classifyFailure(requestId: string, error: unknown, stepKey: Autom
       ? `UNEXPECTED_ERROR:${error.message.slice(0, 180)}`
       : "UNEXPECTED_ERROR";
   await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: unexpectedErrorCode });
-  await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+  if (!keepLimitChangedState) {
+    await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+  }
   return true;
 }

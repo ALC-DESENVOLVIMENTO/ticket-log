@@ -1,4 +1,5 @@
 import { createWhatsappProvider } from "@ticketlog/whatsapp";
+import { formatRequestProtocol } from "@ticketlog/domain";
 import {
   findRequestNotification,
   getRequestNotificationContext,
@@ -57,6 +58,10 @@ export async function notifyWhatsappResolvedRequest(requestId: string): Promise<
     return;
   }
 
+  const protocol = formatRequestProtocol(context.request.id);
+  const changeLimitDone = context.steps.some((step) => step.step_key === "CHANGE_LIMIT" && step.status === "DONE");
+  const evaFailed = context.steps.some((step) => step.step_key === "EVA_RELEASE" && step.status === "FAILED");
+
   const body =
     context.request.status === "CONCLUIDA"
       ? [
@@ -65,14 +70,23 @@ export async function notifyWhatsappResolvedRequest(requestId: string): Promise<
           `Limite anterior: ${formatCurrency(context.request.previous_limit)}`,
           `Novo limite: ${formatCurrency(context.request.new_limit)}`,
           `Data e hora: ${new Date().toLocaleString("pt-BR")}`,
-          `Protocolo: ${context.request.id}`,
+          `Protocolo: ${protocol}`,
         ].join("\n")
-      : [
-          "Nao foi possivel concluir a alteracao neste momento.",
-          "Entre em contato novamente daqui a 30 minutos.",
-          `Protocolo: ${context.request.id}`,
-          `Placa: ${context.request.vehicle_plate}`,
-        ].join("\n");
+      : changeLimitDone && evaFailed
+        ? [
+            "O limite foi alterado com sucesso, mas a liberacao complementar ainda nao foi concluida.",
+            `Placa: ${context.request.vehicle_plate}`,
+            `Limite anterior: ${formatCurrency(context.request.previous_limit)}`,
+            `Novo limite: ${formatCurrency(context.request.new_limit)}`,
+            "Nossa equipe vai continuar a tratativa operacional.",
+            `Protocolo: ${protocol}`,
+          ].join("\n")
+        : [
+            "Nao foi possivel concluir a alteracao neste momento.",
+            "Entre em contato novamente daqui a 30 minutos.",
+            `Protocolo: ${protocol}`,
+            `Placa: ${context.request.vehicle_plate}`,
+          ].join("\n");
 
   try {
     await sendText(context.requesterPhoneE164, body, context.request.id);

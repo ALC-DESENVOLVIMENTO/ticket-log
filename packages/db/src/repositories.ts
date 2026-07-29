@@ -4,6 +4,7 @@ import {
   type RequestState,
   normalizeCpf,
   maskCpf,
+  parseRequestLookup,
   type RoleKey,
 } from "@ticketlog/domain";
 import { getPool } from "./client.js";
@@ -1367,17 +1368,46 @@ export async function getRequestNotificationContext(requestId: string): Promise<
   request: DbRequest;
   requester: DbUserContext;
   requesterPhoneE164: string | null;
+  steps: DbAutomationStep[];
 } | null> {
   const request = await getRequest(requestId);
   if (!request) return null;
   const requester = await getUserContext(request.requester_id);
   if (!requester) return null;
   const requesterPhoneE164 = await getPrimaryAuthorizedPhoneByUserId(request.requester_id);
+  const steps = await listAutomationSteps(requestId);
   return {
     request,
     requester,
     requesterPhoneE164,
+    steps,
   };
+}
+
+export async function resolveRequestLookupId(target: string): Promise<string | null> {
+  const parsed = parseRequestLookup(target);
+  if (parsed.requestId) {
+    return parsed.requestId;
+  }
+
+  if (!parsed.compactPrefix) {
+    return null;
+  }
+
+  const result = await getPool().query<{ id: string }>(
+    `select id
+       from requests
+      where replace(id, '-', '') like $1
+      order by created_at desc
+      limit 2`,
+    [`${parsed.compactPrefix}%`],
+  );
+
+  if (result.rows.length !== 1) {
+    return null;
+  }
+
+  return result.rows[0].id;
 }
 
 export async function recordWhatsappMessage(input: {

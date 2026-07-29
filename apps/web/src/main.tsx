@@ -307,6 +307,40 @@ function money(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function shortProtocol(requestId: string | undefined) {
+  const compact = String(requestId ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return `TL-${(compact.slice(0, 8) || "SEMID")}`;
+}
+
+function hasCompletedStep(steps: any[], stepKey: string) {
+  return steps.some((step) => step.step_key === stepKey && step.status === "DONE");
+}
+
+function hasFailedStep(steps: any[], stepKey: string) {
+  return steps.some((step) => step.step_key === stepKey && step.status === "FAILED");
+}
+
+function displayRequestStatus(request: any, steps: any[] = []) {
+  if (hasCompletedStep(steps, "CHANGE_LIMIT") && hasFailedStep(steps, "EVA_RELEASE")) {
+    return "EVA_PENDENTE";
+  }
+
+  if (
+    request?.new_limit &&
+    request?.platform_result &&
+    /ALTERACAO|LIMIT_VERIFIED|CONFIRMADA/i.test(String(request.platform_result)) &&
+    ["FALHA_MANUAL", "FALHA_REPROCESSAVEL", "RESULTADO_INDETERMINADO"].includes(request?.status)
+  ) {
+    return "EVA_PENDENTE";
+  }
+
+  if (request?.status === "LIMITE_ALTERADO") {
+    return "EVA_PENDENTE";
+  }
+
+  return request?.status ?? "n/d";
+}
+
 function maskPhone(phoneE164: string | undefined) {
   if (!phoneE164) return "n/d";
   if (phoneE164.length <= 4) return "****";
@@ -325,6 +359,7 @@ function statusTone(status: string | undefined) {
     case "EM_PROCESSAMENTO":
     case "NA_FILA":
     case "LIMITE_ALTERADO":
+    case "EVA_PENDENTE":
       return "processing";
     case "FALHA_MANUAL":
     case "FALHA_REPROCESSAVEL":
@@ -585,7 +620,8 @@ function RequestPanel({
       {created && (
         <div className="result">
           <strong>Solicitacao criada</strong>
-          <span>ID: {created.request.id}</span>
+          <span>Protocolo: {shortProtocol(created.request.id)}</span>
+          <span className="muted-line">ID interno: {created.request.id}</span>
           <span>Status: {created.request.status}</span>
           <a href={created.approvalUrl}>Abrir link de aprovacao</a>
         </div>
@@ -699,7 +735,8 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
   const request = lookup?.request ?? lookup;
   const steps = lookup?.steps ?? [];
   const events = lookup?.events ?? [];
-  const retryableStatuses = ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"];
+  const retryableStatuses = ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL", "LIMITE_ALTERADO"];
+  const visualStatus = displayRequestStatus(request, steps);
 
   return (
     <section className="panel">
@@ -716,9 +753,10 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
           <div className="detail-headline">
             <div>
               <strong>{request.vehicle_plate} - {money(request.requested_amount)}</strong>
-              <span className="muted-line">ID: {request.id}</span>
+              <span className="muted-line">Protocolo: {shortProtocol(request.id)}</span>
+              <span className="muted-line">ID interno: {request.id}</span>
             </div>
-            <span className={`status-pill ${statusTone(request.status)}`}>{request.status}</span>
+            <span className={`status-pill ${statusTone(visualStatus)}`}>{visualStatus}</span>
           </div>
           <div className="detail-grid">
             <span>Grupo: {request.vehicle_group}</span>
@@ -750,7 +788,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
             {retryableStatuses.includes(request.status) && (
               <button type="button" className="secondary" onClick={retryCurrentRequest}>
                 <RefreshCw size={18} />
-                {request.status === "NA_FILA" ? "Reenfileirar" : "Reprocessar"}
+                {request.status === "NA_FILA" ? "Reenfileirar" : request.status === "LIMITE_ALTERADO" ? "Retomar EVA" : "Reprocessar"}
               </button>
             )}
           </div>
@@ -834,9 +872,9 @@ function HistoryPanel({ onSelectRequest }: { onSelectRequest: (requestId: string
             <div className="row request-row">
               <div className="detail-headline">
                 <strong>{request.vehicle_plate} - {money(request.requested_amount)}</strong>
-                <span className={`status-pill ${statusTone(request.status)}`}>{request.status}</span>
+                <span className={`status-pill ${statusTone(displayRequestStatus(request))}`}>{displayRequestStatus(request)}</span>
               </div>
-              <span className="muted-line">ID: {request.id}</span>
+              <span className="muted-line">Protocolo: {shortProtocol(request.id)}</span>
               <span>{request.vehicle_group}</span>
             </div>
           </button>
