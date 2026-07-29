@@ -322,3 +322,66 @@ test("failed previous request does not block a new request", async () => {
   assert.match(sentMessages[0].body, /Confirme os dados da solicitacao/i);
   assert.match(sentMessages[0].body, /PWH4E85/);
 });
+
+test("failed previous request with random text shows guided menu instead of asking for plate", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "PROCESSANDO",
+        authenticated_user_id: "user-1",
+        active_request_id: "req-old",
+        authenticated_at: new Date(),
+      }),
+    getRequest: async (id: string) =>
+      id === "req-old"
+        ? ({
+            id: "req-old",
+            requester_id: "user-1",
+            vehicle_plate: "OLD1A23",
+            vehicle_group: "UTILITARIOS",
+            requested_amount: "10.00",
+            channel: "whatsapp",
+            status: "RESULTADO_INDETERMINADO",
+            expires_at: new Date(),
+          } as any)
+        : null,
+    upsertWhatsappSession: async (input: any) =>
+      buildSession({
+        state: input.state ?? "ERRO",
+        authenticated_user_id: input.authenticatedUserId ?? "user-1",
+        active_request_id: input.activeRequestId ?? null,
+        pending_vehicle_plate: input.pendingVehiclePlate ?? null,
+        pending_amount_cents: input.pendingAmountCents ?? null,
+        authenticated_at: new Date(),
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-3",
+    phoneE164: "+5511999999999",
+    text: "j",
+  });
+
+  assert.doesNotMatch(sentMessages[0].body, /Informe a placa do veiculo/i);
+  assert.match(sentMessages[0].body, /nova solicitacao|placa e o valor|Opcoes/i);
+});
+
+test("authenticated session does not treat CPF-like input as amount", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AUTENTICADO",
+        authenticated_user_id: "user-1",
+        authenticated_at: new Date(),
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-4",
+    phoneE164: "+5511999999999",
+    text: "44214899806",
+  });
+
+  assert.match(sentMessages[0].body, /sessao ja esta autenticada|placa e o valor/i);
+  assert.doesNotMatch(sentMessages[0].body, /Valor invalido/i);
+});

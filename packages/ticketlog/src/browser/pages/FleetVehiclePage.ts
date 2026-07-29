@@ -180,8 +180,11 @@ export class FleetVehiclePage {
     input: { plate: string; amount: number; reason: string },
   ): Promise<void> {
     const addToCurrentLimit = formFrame.locator("input[type='radio'][name='tipo'][value='AR']").first();
-    await expect(addToCurrentLimit).toBeVisible();
-    await addToCurrentLimit.check({ force: true });
+    if (await addToCurrentLimit.isVisible().catch(() => false)) {
+      await addToCurrentLimit.check({ force: true });
+    } else {
+      await this.checkOptionByText(formFrame, /adicionar o valor ao limite atual|add.*current limit/i);
+    }
 
     const value = formatCurrencyInput(input.amount);
     const valueField = formFrame.locator("input#valor, input[name='valor']").first();
@@ -190,8 +193,11 @@ export class FleetVehiclePage {
     await expect(valueField).toHaveValue(value);
 
     const currentPeriod = formFrame.locator("input[type='radio'][name='fl_tipo_operacao'][value='SP']").first();
-    await expect(currentPeriod).toBeVisible();
-    await currentPeriod.check({ force: true });
+    if (await currentPeriod.isVisible().catch(() => false)) {
+      await currentPeriod.check({ force: true });
+    } else {
+      await this.checkOptionByText(formFrame, /somente para o per[ií]odo|only for the period/i);
+    }
 
     const reasonField = formFrame.locator("input#ds_justifica, input[name='ds_justifica']").first();
     await expect(reasonField).toBeVisible();
@@ -221,6 +227,20 @@ export class FleetVehiclePage {
     }
 
     if (!(await plateCheckbox.isChecked())) {
+      const selectText = row.first().getByText(/selecionar|select/i).first();
+      if (await selectText.isVisible().catch(() => false)) {
+        await selectText.click({ force: true }).catch(() => undefined);
+        await this.page.waitForTimeout(500);
+      }
+      plateCheckbox = formFrame
+        .locator("tr")
+        .filter({ hasText: normalizedPlate })
+        .first()
+        .locator("input[type='checkbox'][name='chklimite']")
+        .first();
+    }
+
+    if (!(await plateCheckbox.isChecked())) {
       await plateCheckbox.evaluate((element) => {
         const checkbox = element as HTMLInputElement;
         checkbox.checked = true;
@@ -237,6 +257,8 @@ export class FleetVehiclePage {
     const deadline = Date.now() + 60_000;
     const successPattern =
       /alterad[oa].*sucesso|limite.*atualizad[oa]|opera..o.*sucesso|altera..o.*realizad[ao]|solicita..o.*realizad[ao]|processad[ao].*sucesso|sucesso ao alterar|limit.*(?:changed|updated).*success|operation.*success|successfully.*(?:changed|updated)/i;
+    const validationErrorPattern =
+      /preencha|campo obrigat.rio|selecione ao menos|valor inv.lido|n.o foi poss.vel|erro ao alterar/i;
 
     while (Date.now() < deadline) {
       await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -245,6 +267,9 @@ export class FleetVehiclePage {
         const bodyText = await scope.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
         const match = bodyText.match(successPattern);
         if (match) return bodyText.slice(0, 500);
+        if (validationErrorPattern.test(bodyText) && /limite|alterar/i.test(bodyText)) {
+          throw new ManualInterventionError("CHANGE_LIMIT_VALIDATION_OR_PLATFORM_ERROR");
+        }
       }
 
       const formStillOpen = await this.waitForChangeLimitFrame(1_000);

@@ -194,6 +194,10 @@ function isStatusIntent(text: string): boolean {
   return ["status", "acompanhar", "protocolo", "op_ver_status"].includes(lowerMessage(text));
 }
 
+function looksLikeCpfInput(text: string): boolean {
+  return normalizeCpf(text).length === 11;
+}
+
 function defaultMenuOptions(): WhatsappOption[] {
   return [
     { id: "op_nova_solicitacao", title: "Nova solicitacao" },
@@ -361,6 +365,14 @@ function buildNextActionBody(status: string): string {
   return "Posso consultar o status atual, iniciar uma nova solicitacao ou encerrar o atendimento.";
 }
 
+function buildAuthenticatedPrompt(): string {
+  return [
+    "Sua sessao ja esta autenticada.",
+    "Para abrir uma nova solicitacao, envie a placa e o valor. Exemplo: PWH4E85 10,00.",
+    "Se preferir, escolha uma opcao abaixo.",
+  ].join("\n");
+}
+
 async function resolvePendingInput(
   deps: WhatsappFlowDependencies,
   user: DbUserContext,
@@ -478,7 +490,8 @@ export class WhatsappFlowService {
         currentRequest.status,
       );
     if (terminalRequest) {
-      const clearedState = isFinishConversation(normalizedText) ? "CONCLUIDO" : "AUTENTICADO";
+      const clearedState =
+        isFinishConversation(normalizedText) || currentRequest.status === "CONCLUIDA" ? "CONCLUIDO" : "ERRO";
       session = await this.deps.upsertWhatsappSession({
         phoneE164: input.phoneE164,
         state: clearedState,
@@ -873,6 +886,13 @@ export class WhatsappFlowService {
             } as PendingInput)
           : null;
 
+    const parsed = parsePlateAndAmount(text);
+    const hasPendingPlate = Boolean(pendingFromSession?.plate);
+    const hasActionableRequestInput =
+      isStartNewRequest(text) ||
+      Boolean(parsed.plate) ||
+      (hasPendingPlate && (parsed.invalidAmount || parsed.amountCents !== undefined));
+
     if ((session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO" && !isConfirm(text)) {
       await sendGuidedMessage({
         provider: this.provider,
@@ -883,6 +903,25 @@ export class WhatsappFlowService {
           { id: "op_confirmar", title: "Confirmar" },
           { id: "cancelar", title: "Cancelar" },
         ],
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (
+      (session.state as WhatsappConversationState) === "AUTENTICADO" &&
+      !pendingFromSession &&
+      !hasActionableRequestInput
+    ) {
+      const body = looksLikeCpfInput(text)
+        ? buildAuthenticatedPrompt()
+        : "Nao consegui identificar uma nova solicitacao. Envie a placa e o valor juntos, por exemplo: PWH4E85 10,00.";
+      await sendGuidedMessage({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body,
+        options: defaultMenuOptions(),
         replyToMessageId: input.providerMessageId,
       });
       return;

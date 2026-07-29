@@ -108,8 +108,12 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       } catch (error) {
         if (!(error instanceof IndeterminateResultError)) throw error;
 
-        await page.waitForTimeout(2_000);
-        newLimit = await this.readLimitAfterSubmission(fleet, input.vehiclePlate);
+        newLimit = await this.pollLimitAfterAmbiguousSubmission({
+          fleet,
+          vehiclePlate: input.vehiclePlate,
+          previousLimit,
+          requestedAmount: input.requestedAmount,
+        });
         const expectedLimit =
           previousLimit !== null ? Number((previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
         const deltaMatches =
@@ -288,6 +292,39 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
 
     await fleet.openPlate(vehiclePlate);
     return fleet.readCurrentLimit();
+  }
+
+  private async pollLimitAfterAmbiguousSubmission(input: {
+    fleet: FleetVehiclePage;
+    vehiclePlate: string;
+    previousLimit: number | null;
+    requestedAmount: number;
+  }): Promise<number | null> {
+    const deadline = Date.now() + 45_000;
+    const expectedLimit =
+      input.previousLimit !== null ? Number((input.previousLimit + Number(input.requestedAmount)).toFixed(2)) : null;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      const currentLimit = await this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch(() => null);
+      if (currentLimit === null) {
+        continue;
+      }
+
+      const deltaMatches =
+        input.previousLimit !== null &&
+        Math.abs((currentLimit - input.previousLimit) - Number(input.requestedAmount)) < 0.01;
+      const expectedMatches = expectedLimit !== null && Math.abs(currentLimit - expectedLimit) < 0.01;
+      if (deltaMatches || expectedMatches) {
+        return currentLimit;
+      }
+      if (input.previousLimit !== null && Math.abs(currentLimit - input.previousLimit) < 0.01) {
+        continue;
+      }
+      return currentLimit;
+    }
+
+    return this.readLimitAfterSubmission(input.fleet, input.vehiclePlate).catch(() => null);
   }
 
   private async ensureAuthenticated(page: Page): Promise<void> {
