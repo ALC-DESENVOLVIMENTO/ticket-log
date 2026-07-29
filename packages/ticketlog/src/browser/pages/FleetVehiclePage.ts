@@ -507,67 +507,95 @@ export class FleetVehiclePage {
   }
 
   private async closeEvaSuggestionPopup(): Promise<void> {
-    const popup = this.page
-      .locator("div, section, aside")
-      .filter({ has: this.page.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio|transa..o foi negada/i).first() })
-      .last();
+    const scopes: Array<Page | Frame> = [this.page, ...this.page.frames()];
+    for (const scope of scopes) {
+      const popup = scope
+        .locator("div, section, aside")
+        .filter({
+          has: scope.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio|transa..o foi negada/i).first(),
+        })
+        .last();
 
-    if (!(await popup.isVisible().catch(() => false))) return;
-
-    const closeCandidates = [
-      popup.locator("button[aria-label*='fechar' i], button[title*='fechar' i], button[aria-label*='close' i]").first(),
-      popup.locator("svg").locator("xpath=ancestor::*[@role='button' or self::button or self::a][1]").first(),
-      popup.locator("button").filter({ hasNotText: /liberar restri..o/i }).first(),
-      popup.locator("[role='button']").filter({ hasNotText: /liberar restri..o/i }).first(),
-    ];
-
-    for (const candidate of closeCandidates) {
-      if (await candidate.isVisible().catch(() => false)) {
-        await candidate.click({ force: true }).catch(() => undefined);
-        await this.page.waitForTimeout(300);
-        if (!(await popup.isVisible().catch(() => false))) return;
+      if (!(await popup.isVisible().catch(() => false))) {
+        continue;
       }
-    }
 
-    const clickedViaDom = await popup.evaluate((element) => {
-      const root = element as HTMLElement;
-      const clickable = Array.from(root.querySelectorAll("button, [role='button'], a, div, span")).find((node) => {
-        const html = node as HTMLElement;
-        const text = (node.textContent ?? "").trim().toLowerCase();
-        const aria = (html.getAttribute("aria-label") ?? "").trim().toLowerCase();
-        const title = (html.getAttribute("title") ?? "").trim().toLowerCase();
-        const className = (html.className ?? "").toString().toLowerCase();
-        const style = window.getComputedStyle(html);
-        const rect = html.getBoundingClientRect();
-        const looksLikeClose =
-          aria.includes("fechar") ||
-          aria.includes("close") ||
-          title.includes("fechar") ||
-          title.includes("close") ||
-          className.includes("close") ||
-          className.includes("fechar");
-        const harmlessText = text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
-        const topRightCircle =
-          rect.width >= 16 &&
-          rect.width <= 60 &&
-          rect.height >= 16 &&
-          rect.height <= 60 &&
-          style.borderRadius.includes("50");
+      const closeCandidates = [
+        popup.locator("button[aria-label*='fechar' i], button[title*='fechar' i], button[aria-label*='close' i]").first(),
+        popup.locator("svg").locator("xpath=ancestor::*[@role='button' or self::button or self::a or self::div or self::span][1]").first(),
+        popup.locator("button").filter({ hasNotText: /liberar restri..o/i }).first(),
+        popup.locator("[role='button']").filter({ hasNotText: /liberar restri..o/i }).first(),
+      ];
 
-        return (looksLikeClose || (harmlessText && topRightCircle)) && style.visibility !== "hidden";
-      }) as HTMLElement | undefined;
-      clickable?.click();
-      return Boolean(clickable);
-    }).catch(() => false);
-    await this.page.waitForTimeout(300);
-    if (!(await popup.isVisible().catch(() => false))) return;
+      for (const candidate of closeCandidates) {
+        if (await candidate.isVisible().catch(() => false)) {
+          await candidate.click({ force: true }).catch(() => undefined);
+          await this.page.waitForTimeout(250);
+          if (!(await popup.isVisible().catch(() => false))) return;
+        }
+      }
 
-    if (!clickedViaDom) {
+      await popup
+        .evaluate((element) => {
+          const root = element as HTMLElement;
+          const clickable = Array.from(root.querySelectorAll("button, [role='button'], a, div, span, svg")).find((node) => {
+            const html = node as HTMLElement;
+            const text = (node.textContent ?? "").trim().toLowerCase();
+            const aria = (html.getAttribute("aria-label") ?? "").trim().toLowerCase();
+            const title = (html.getAttribute("title") ?? "").trim().toLowerCase();
+            const className = (html.className ?? "").toString().toLowerCase();
+            const style = window.getComputedStyle(html);
+            const rect = html.getBoundingClientRect();
+            const looksLikeClose =
+              aria.includes("fechar") ||
+              aria.includes("close") ||
+              title.includes("fechar") ||
+              title.includes("close") ||
+              className.includes("close") ||
+              className.includes("fechar");
+            const harmlessText = text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
+            const topRightCircle =
+              rect.width >= 12 &&
+              rect.width <= 64 &&
+              rect.height >= 12 &&
+              rect.height <= 64 &&
+              (style.borderRadius.includes("50") || style.borderRadius.includes("999"));
+
+            return (looksLikeClose || (harmlessText && topRightCircle)) && style.visibility !== "hidden";
+          }) as HTMLElement | SVGElement | undefined;
+
+          if (clickable instanceof HTMLElement) {
+            clickable.click();
+            return true;
+          }
+
+          if (clickable instanceof SVGElement) {
+            (clickable.closest("button, [role='button'], a, div, span") as HTMLElement | null)?.click();
+            return true;
+          }
+
+          return false;
+        })
+        .catch(() => false);
+
+      await this.page.waitForTimeout(250);
+      if (!(await popup.isVisible().catch(() => false))) return;
+
       const box = await popup.boundingBox().catch(() => null);
       if (box) {
-        await this.page.mouse.click(box.x + box.width - 18, box.y + 18).catch(() => undefined);
-        await this.page.waitForTimeout(300);
-        if (!(await popup.isVisible().catch(() => false))) return;
+        const clickPoints = [
+          { x: box.x + box.width - 18, y: box.y + 18 },
+          { x: box.x + box.width - 8, y: box.y + 8 },
+          { x: box.x + box.width + 4, y: box.y + 10 },
+          { x: box.x + box.width + 8, y: box.y + 2 },
+          { x: box.x + box.width - 4, y: box.y - 2 },
+        ];
+
+        for (const point of clickPoints) {
+          await this.page.mouse.click(point.x, point.y).catch(() => undefined);
+          await this.page.waitForTimeout(250);
+          if (!(await popup.isVisible().catch(() => false))) return;
+        }
       }
     }
 
