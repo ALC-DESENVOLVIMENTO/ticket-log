@@ -40,6 +40,8 @@ export const ticketLogUi = {
     frameHost: "eva-front.edenred.com.br",
     rootText:
       /sou a eva|i am eva|digite sobre o que deseja falar|type what you want|digite aqui sua d.vida|type your question|como deseja prosseguir|how do you want to proceed/i,
+    rejectedPage:
+      /the requested url was rejected|please consult with your administrator|your support id is/i,
     blockingPromptText:
       /posso ajudar|transa..o foi negada|liberar restri..o|fatura.*vence hoje|pegue a sua fatura/i,
     blockingPromptCloseSelectors: [
@@ -62,6 +64,7 @@ export function isEvaFrameCandidate(url: string, bodyText: string): boolean {
   return (
     url.includes(ticketLogUi.eva.frameHost) ||
     ticketLogUi.eva.rootText.test(bodyText) ||
+    ticketLogUi.eva.rejectedPage.test(bodyText) ||
     ticketLogUi.eva.releaseConfirmation.test(bodyText)
   );
 }

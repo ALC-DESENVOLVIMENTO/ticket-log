@@ -17,7 +17,16 @@ export class EvaPage {
   }
 
   async open(): Promise<void> {
-    if (await this.getEvaSurface(500)) return;
+    const existingSurface = await this.getEvaSurface(500);
+    if (existingSurface) {
+      if (!(await this.isRejectedSurface(existingSurface))) return;
+
+      console.warn("ticketlog.eva:rejected-url-detected");
+      if (!(await this.closePanelIfOpen())) {
+        throw new ManualInterventionError("EVA_URL_REJECTED");
+      }
+      console.info("ticketlog.eva:rejected-panel-closed");
+    }
     await this.dismissBlockingEvaPrompts();
 
     const evaButton = await this.findEvaLauncher(8_000);
@@ -26,14 +35,20 @@ export class EvaPage {
     }
 
     await this.clickEvaLauncher(evaButton);
-    if (await this.getEvaSurface(8_000)) return;
+    const openedSurface = await this.getEvaSurface(8_000);
+    if (openedSurface) {
+      await this.assertSurfaceAccepted(openedSurface);
+      return;
+    }
 
     await this.dismissBlockingEvaPrompts();
     await this.clickEvaLauncher(evaButton, true);
-    if (!(await this.getEvaSurface(12_000))) {
+    const retriedSurface = await this.getEvaSurface(12_000);
+    if (!retriedSurface) {
       await this.logEvaOpenDiagnostics();
       throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
     }
+    await this.assertSurfaceAccepted(retriedSurface);
   }
 
   async releaseFuelRestriction(plate: string): Promise<void> {
@@ -182,6 +197,7 @@ export class EvaPage {
   private async requireEvaSurface(): Promise<Frame> {
     const frame = await this.getEvaSurface();
     if (!frame) throw new ManualInterventionError("EVA_PANEL_NOT_FOUND");
+    await this.assertSurfaceAccepted(frame);
     return frame;
   }
 
@@ -201,9 +217,11 @@ export class EvaPage {
           /transa..es|transactions|liberar abastecimento|incluir nova libera..o|voltar ao menu|sair e avaliar|digite aqui/i.test(
             body,
           );
+        const rejectedPage = ticketLogUi.eva.rejectedPage.test(body);
         const score =
           (ticketLogUi.eva.rootText.test(body) ? 20 : 0) +
           (hasOperationalText ? 15 : 0) +
+          (rejectedPage ? 30 : 0) +
           Math.min(visibleControls, 10) +
           (frame.url().includes(ticketLogUi.eva.frameHost) ? 3 : 0);
 
@@ -219,11 +237,29 @@ export class EvaPage {
     return null;
   }
 
+  private async isRejectedSurface(frame: Frame): Promise<boolean> {
+    const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+    return ticketLogUi.eva.rejectedPage.test(body);
+  }
+
+  private async assertSurfaceAccepted(frame: Frame): Promise<void> {
+    if (!(await this.isRejectedSurface(frame))) return;
+
+    console.warn("ticketlog.eva:rejected-url-detected");
+    await this.closePanelIfOpen().catch(() => false);
+    throw new ManualInterventionError("EVA_URL_REJECTED");
+  }
+
   private async waitForEvaConfirmation(frame: Frame): Promise<string | null> {
     const deadline = Date.now() + 45_000;
 
     while (Date.now() < deadline) {
       const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      if (ticketLogUi.eva.rejectedPage.test(body)) {
+        console.warn("ticketlog.eva:rejected-url-detected-during-confirmation");
+        await this.closePanelIfOpen().catch(() => false);
+        throw new ManualInterventionError("EVA_URL_REJECTED");
+      }
       if (isEvaReleaseConfirmation(body)) return body.slice(0, 500);
       await this.page.waitForTimeout(500);
     }
@@ -489,7 +525,7 @@ export class EvaPage {
           }
 
           return false;
-        }, `(?:${ticketLogUi.eva.rootText.source})|(?:${ticketLogUi.eva.releaseConfirmation.source})`)
+        }, `(?:${ticketLogUi.eva.rootText.source})|(?:${ticketLogUi.eva.releaseConfirmation.source})|(?:${ticketLogUi.eva.rejectedPage.source})`)
         .catch(() => false);
       if (result) {
         console.info("ticketlog.eva:panel-close-control-clicked");

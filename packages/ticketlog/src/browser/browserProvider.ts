@@ -278,15 +278,12 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await this.ensureAuthenticated(page);
       await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Liberando restricao pela EVA" });
       const eva = new EvaPage(page);
-      if (!(await eva.isAvailable())) {
-        await this.openEvaHostPage(page);
-        console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
-      } else {
-        console.info(
-          { plate: input.vehiclePlate, url: page.url() },
-          "ticketlog.releaseEva:using-current-page",
-        );
-      }
+
+      await eva.closePanelIfOpen().catch(() => false);
+      await this.openEvaHostPage(page);
+      console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
+      await eva.closePanelIfOpen().catch(() => false);
+
       await eva.open();
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:panel-open");
       await eva.releaseFuelRestriction(input.vehiclePlate);
