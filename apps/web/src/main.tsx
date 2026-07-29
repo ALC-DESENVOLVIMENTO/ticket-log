@@ -29,6 +29,7 @@ import {
   listRequests,
   listUsers,
   login,
+  rejectRequest,
   logout,
   retryRequest,
   releaseTicketLogOperation,
@@ -496,9 +497,11 @@ function ApprovalView({ token, onAuthNeeded }: { token: string; onAuthNeeded: ()
 function RequestPanel({
   publicConfig,
   onRequestCreated,
+  user,
 }: {
   publicConfig: any;
   onRequestCreated: (requestId: string) => void;
+  user: any;
 }) {
   const [plate, setPlate] = useState("");
   const [vehicleGroup, setVehicleGroup] = useState("GERAL_DE_RESTRICOES");
@@ -535,13 +538,18 @@ function RequestPanel({
         <h2>Nova solicitacao web</h2>
         <span>Canal interno</span>
       </div>
+      {!user?.access?.canCreateWebRequest && (
+        <div className="hint">
+          Seu perfil possui acesso apenas de consulta no portal. Solicite alteracoes pelo WhatsApp ou acompanhe os protocolos criados.
+        </div>
+      )}
       <label>
         Placa
-        <input value={plate} onChange={(event) => setPlate(event.target.value)} placeholder="ABC1D23" />
+        <input value={plate} onChange={(event) => setPlate(event.target.value)} placeholder="ABC1D23" disabled={!user?.access?.canCreateWebRequest} />
       </label>
       <label>
         Grupo
-        <select value={vehicleGroup} onChange={(event) => setVehicleGroup(event.target.value)}>
+        <select value={vehicleGroup} onChange={(event) => setVehicleGroup(event.target.value)} disabled={!user?.access?.canCreateWebRequest}>
           {(publicConfig?.vehicleGroups ?? []).map((group: any) => (
             <option key={group.key} value={group.key}>
               {group.label} - limite {money(group.maxAmount)}
@@ -551,7 +559,7 @@ function RequestPanel({
       </label>
       <label>
         Valor adicional
-        <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="350,00" />
+        <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="350,00" disabled={!user?.access?.canCreateWebRequest} />
       </label>
       <span className="hint">
         {requiresSecondApprovalHint
@@ -560,9 +568,9 @@ function RequestPanel({
       </span>
       <label>
         Justificativa interna
-        <textarea value={justification} onChange={(event) => setJustification(event.target.value)} />
+        <textarea value={justification} onChange={(event) => setJustification(event.target.value)} disabled={!user?.access?.canCreateWebRequest} />
       </label>
-      <button>
+      <button disabled={!user?.access?.canCreateWebRequest}>
         <CheckCircle2 size={18} />
         Criar solicitacao
       </button>
@@ -579,12 +587,13 @@ function RequestPanel({
   );
 }
 
-function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
+function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string; user: any }) {
   const [lookupId, setLookupId] = useState(initialLookupId);
   const [lookup, setLookup] = useState<any>(null);
   const [lookupError, setLookupError] = useState("");
   const [secondApprovalStatus, setSecondApprovalStatus] = useState("");
   const [retryStatus, setRetryStatus] = useState("");
+  const [rejectionReason, setRejectionReason] = useState("");
 
   useEffect(() => {
     if (!initialLookupId) return;
@@ -667,6 +676,18 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
     }
   }
 
+  async function rejectCurrentRequest() {
+    setLookupError("");
+    try {
+      const result = await rejectRequest(lookup.request.id, rejectionReason);
+      setRetryStatus(JSON.stringify(result));
+      setRejectionReason("");
+      setLookup(await getRequestDetails(lookup.request.id));
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : "REQUEST_REJECTION_FAILED");
+    }
+  }
+
   const request = lookup?.request ?? lookup;
   const steps = lookup?.steps ?? [];
   const events = lookup?.events ?? [];
@@ -706,10 +727,16 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
                 Abrir aprovacao
               </button>
             )}
-            {request.status === "AGUARDANDO_SEGUNDA_APROVACAO" && (
+            {request.status === "AGUARDANDO_SEGUNDA_APROVACAO" && user?.access?.canApproveRequests && (
               <button type="button" onClick={approveSecond}>
                 <ShieldCheck size={18} />
                 Fazer segunda aprovacao
+              </button>
+            )}
+            {["AGUARDANDO_APROVACAO", "AGUARDANDO_SEGUNDA_APROVACAO"].includes(request.status) && user?.access?.canRejectRequests && (
+              <button type="button" className="secondary" onClick={rejectCurrentRequest}>
+                <Square size={16} />
+                Rejeitar
               </button>
             )}
             {retryableStatuses.includes(request.status) && (
@@ -719,6 +746,12 @@ function StatusPanel({ initialLookupId = "" }: { initialLookupId?: string }) {
               </button>
             )}
           </div>
+          {["AGUARDANDO_APROVACAO", "AGUARDANDO_SEGUNDA_APROVACAO"].includes(request.status) && user?.access?.canRejectRequests && (
+            <label>
+              Justificativa da rejeicao
+              <textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Informe o motivo da rejeicao" />
+            </label>
+          )}
           {secondApprovalStatus && <code>{secondApprovalStatus}</code>}
           {retryStatus && <code>{retryStatus}</code>}
 
@@ -1025,9 +1058,11 @@ function UsersPanel() {
     name: "",
     employeeNumber: "",
     corporateEmail: "",
+    cpf: "",
+    operationScope: "GERAL",
     phoneE164: "",
     password: "Alterar@123",
-    roles: ["SOLICITANTE", "APROVADOR"],
+    roles: ["SUPERVISOR"],
   });
   const [error, setError] = useState("");
 
@@ -1061,6 +1096,8 @@ function UsersPanel() {
         <label>Nome<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label>Matricula<input value={form.employeeNumber} onChange={(e) => setForm({ ...form, employeeNumber: e.target.value })} /></label>
         <label>E-mail<input value={form.corporateEmail} onChange={(e) => setForm({ ...form, corporateEmail: e.target.value })} /></label>
+        <label>CPF<input value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} placeholder="000.000.000-00" /></label>
+        <label>Escopo<input value={form.operationScope} onChange={(e) => setForm({ ...form, operationScope: e.target.value })} placeholder="GERAL" /></label>
         <label>WhatsApp E.164<input value={form.phoneE164} onChange={(e) => setForm({ ...form, phoneE164: e.target.value })} placeholder="+5511999999999" /></label>
         <label>Senha inicial<input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
         <button><UserPlus size={18} /> Criar usuario</button>
@@ -1076,6 +1113,8 @@ function UsersPanel() {
             <div className="row" key={user.id}>
               <strong>{user.name}</strong>
               <span>{user.corporate_email}</span>
+              <span>CPF: {user.cpf_last4 ? `***.***.***-${user.cpf_last4.slice(-2)}` : "pendente"}</span>
+              <span>Escopo: {user.operation_scope ?? "GERAL"}</span>
               <span>MFA: {user.mfa_enabled ? "ativo" : "pendente"}</span>
             </div>
           ))}
@@ -1095,8 +1134,12 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
         <nav>
           <button className={view === "request" ? "active" : ""} onClick={() => setView("request")}><Clock size={16} /> Solicitacao</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><History size={16} /> Historico</button>
-          <button className={view === "operations" ? "active" : ""} onClick={() => setView("operations")}><TerminalSquare size={16} /> Operacao</button>
-          <button className={view === "users" ? "active" : ""} onClick={() => setView("users")}><Users size={16} /> Usuarios</button>
+          {user?.access?.canApproveRequests && (
+            <button className={view === "operations" ? "active" : ""} onClick={() => setView("operations")}><TerminalSquare size={16} /> Operacao</button>
+          )}
+          {user?.access?.canManageUsers && (
+            <button className={view === "users" ? "active" : ""} onClick={() => setView("users")}><Users size={16} /> Usuarios</button>
+          )}
         </nav>
         <IntegrationBadge />
       </aside>
@@ -1110,20 +1153,21 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
           <button className="secondary" onClick={onLogout}><LogOut size={18} /> Sair</button>
         </header>
         <p className="userline">Sessao: {user?.name} ({user?.email})</p>
+        <p className="userline">Perfil: {(user?.roles ?? []).join(", ")} · Escopo: {user?.operationScope ?? "GERAL"}</p>
         {view === "request" && (
           <div className="grid">
-            <RequestPanel publicConfig={publicConfig} onRequestCreated={setActiveRequestId} />
-            <StatusPanel initialLookupId={activeRequestId} />
+            <RequestPanel publicConfig={publicConfig} onRequestCreated={setActiveRequestId} user={user} />
+            <StatusPanel initialLookupId={activeRequestId} user={user} />
           </div>
         )}
         {view === "history" && (
           <div className="grid">
             <HistoryPanel onSelectRequest={setActiveRequestId} />
-            <StatusPanel initialLookupId={activeRequestId} />
+            <StatusPanel initialLookupId={activeRequestId} user={user} />
           </div>
         )}
         {view === "operations" && <OperationsPanel user={user} />}
-        {view === "users" && <UsersPanel />}
+        {view === "users" && user?.access?.canManageUsers && <UsersPanel />}
       </section>
     </main>
   );

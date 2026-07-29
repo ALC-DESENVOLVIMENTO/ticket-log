@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { generateSecret, generateURI, verify } from "otplib";
+import { generateSecret, generateURI } from "otplib";
 import QRCode from "qrcode";
 import {
   createAuthSession,
   enableUserMfa,
   findUserByEmail,
-  findUserById,
+  getUserContext,
   listUsers,
   revokeAuthSession,
   setUserMfaSecret,
@@ -13,6 +13,8 @@ import {
 } from "@ticketlog/db";
 import { config } from "../config.js";
 import { getAuthenticatedUser } from "../auth.js";
+import { verifyTotpCode } from "../mfa.js";
+import { assertCanManageUsers, resolveAccessProfile } from "../roles.js";
 import {
   createOpaqueToken,
   decryptText,
@@ -26,12 +28,17 @@ function sessionExpiresAt(): Date {
   return new Date(Date.now() + 12 * 60 * 60_000);
 }
 
-function publicUser(user: { id: string; name: string; corporate_email: string; mfa_enabled?: boolean }) {
+function publicUser(user: Awaited<ReturnType<typeof getUserContext>> extends infer T ? Exclude<T, null> : never) {
+  const access = resolveAccessProfile(user);
   return {
     id: user.id,
     name: user.name,
     email: user.corporate_email,
+    roles: user.roles,
+    operationScope: user.operation_scope ?? "GERAL",
+    cpfMasked: user.cpf_last4 ? `***.***.***-${user.cpf_last4.slice(-2)}` : null,
     mfaEnabled: Boolean(user.mfa_enabled),
+    access,
   };
 }
 
@@ -61,23 +68,26 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const secret = decryptText(user.mfa_secret_encrypted);
-      const result = await verify({ token: body.totpCode, secret });
-      if (!result.valid) {
+      if (!verifyTotpCode({ token: body.totpCode, secret })) {
         return reply.code(401).send({ error: "INVALID_MFA_CODE" });
       }
     }
 
     const sessionToken = await issueSession(request, user.id);
+    const context = await getUserContext(user.id);
+    if (!context) {
+      return reply.code(404).send({ error: "USER_NOT_FOUND" });
+    }
     return {
       sessionToken,
       requiresMfaSetup: !user.mfa_enabled,
-      user: publicUser(user),
+      user: publicUser(context),
     };
   });
 
   app.get("/auth/me", async (request) => {
     const authUser = await getAuthenticatedUser(request);
-    const user = await findUserById(authUser.id);
+    const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     return { user: publicUser(user) };
   });
@@ -92,7 +102,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/auth/mfa/setup", async (request) => {
     const authUser = await getAuthenticatedUser(request);
-    const user = await findUserById(authUser.id);
+    const user = await getUserContext(authUser.id);
     if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
 
     const secret = generateSecret();
@@ -106,7 +116,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/mfa/verify", async (request, reply) => {
     const authUser = await getAuthenticatedUser(request);
     const body = request.body as { code?: string };
-    const user = await findUserById(authUser.id);
+    const user = await getUserContext(authUser.id);
     if (!user?.mfa_secret_encrypted) {
       return reply.code(409).send({ error: "MFA_SETUP_NOT_STARTED" });
     }
@@ -116,8 +126,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: "INVALID_MFA_CODE" });
     }
 
-    const result = await verify({ token: body.code, secret });
-    if (!result.valid) {
+    if (!verifyTotpCode({ token: body.code, secret })) {
       return reply.code(401).send({ error: "INVALID_MFA_CODE" });
     }
 
@@ -126,22 +135,30 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/admin/users", async (request) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanManageUsers(user);
     return { users: await listUsers() };
   });
 
   app.post("/admin/users", async (request, reply) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const requester = await getUserContext(authUser.id);
+    if (!requester) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanManageUsers(requester);
     const body = request.body as {
       name?: string;
       employeeNumber?: string;
       corporateEmail?: string;
+      cpf?: string;
+      operationScope?: string;
       phoneE164?: string;
       password?: string;
       roles?: string[];
     };
 
-    if (!body.name || !body.employeeNumber || !body.corporateEmail || !body.password) {
+    if (!body.name || !body.employeeNumber || !body.corporateEmail || !body.password || !body.cpf) {
       return reply.code(400).send({ error: "MISSING_REQUIRED_USER_FIELDS" });
     }
 
@@ -149,11 +166,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       name: body.name,
       employeeNumber: body.employeeNumber,
       corporateEmail: body.corporateEmail,
+      cpf: body.cpf,
+      operationScope: body.operationScope,
       phoneE164: body.phoneE164,
       passwordHash: await hashPassword(body.password),
       roles: body.roles,
     });
 
-    return { user: publicUser(user) };
+    const context = await getUserContext(user.id);
+    if (!context) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    return { user: publicUser(context) };
   });
 }

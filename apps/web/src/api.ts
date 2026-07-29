@@ -164,6 +164,14 @@ export async function retryRequest(requestId: string) {
   });
 }
 
+export async function rejectRequest(requestId: string, justification: string) {
+  return jsonFetch(`/requests/${requestId}/reject`, {
+    method: "POST",
+    headers: devHeaders(),
+    body: JSON.stringify({ justification }),
+  });
+}
+
 export async function getTicketLogSessionStatus() {
   return jsonFetch("/operations/ticketlog/session", {
     headers: devHeaders(),
@@ -194,6 +202,8 @@ export async function createUser(input: {
   name: string;
   employeeNumber: string;
   corporateEmail: string;
+  cpf: string;
+  operationScope?: string;
   phoneE164?: string;
   password: string;
   roles: string[];

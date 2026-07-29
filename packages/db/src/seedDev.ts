@@ -1,5 +1,5 @@
+import { createHash, scryptSync, randomBytes } from "node:crypto";
 import { getPool, closePool } from "./client.js";
-import { scryptSync, randomBytes } from "node:crypto";
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString("base64url");
@@ -7,26 +7,36 @@ function hashPassword(password: string): string {
   return `scrypt$${salt}$${hash}`;
 }
 
+function hashCpf(cpf: string): string {
+  return createHash("sha256").update(cpf.replace(/\D/g, "")).digest("hex");
+}
+
 async function main() {
   const client = getPool();
   const passwordHash = hashPassword("Dev@123456");
   await client.query(`
-    insert into users(id, name, employee_number, corporate_email, status)
+    insert into users(id, name, employee_number, corporate_email, cpf_hash, cpf_last4, operation_scope, status)
     values (
       '00000000-0000-0000-0000-000000000001',
       'Usuario Desenvolvimento',
       'DEV-001',
       'dev@example.com',
+      '${hashCpf("12345678909")}',
+      '8909',
+      'GERAL',
       'active'
     )
     on conflict (id) do nothing;
 
-    insert into users(id, name, employee_number, corporate_email, status)
+    insert into users(id, name, employee_number, corporate_email, cpf_hash, cpf_last4, operation_scope, status)
     values (
       '00000000-0000-0000-0000-000000000002',
       'Aprovador Desenvolvimento',
       'DEV-002',
       'approver@example.com',
+      '${hashCpf("98765432100")}',
+      '2100',
+      'GERAL',
       'active'
     )
     on conflict (id) do nothing;
@@ -51,14 +61,18 @@ async function main() {
     values ('00000000-0000-0000-0000-000000000001', '+5500000000000', now())
     on conflict (phone_e164) do nothing;
 
+    insert into authorized_phones(user_id, phone_e164, verified_at)
+    values ('00000000-0000-0000-0000-000000000002', '+5500000000001', now())
+    on conflict (phone_e164) do nothing;
+
     insert into user_roles(user_id, role_id)
     select '00000000-0000-0000-0000-000000000001', id from roles
-    where name in ('SOLICITANTE', 'APROVADOR', 'ADMINISTRADOR')
+    where name in ('SUPERVISOR', 'COORDENADOR', 'ADMINISTRADOR')
     on conflict do nothing;
 
     insert into user_roles(user_id, role_id)
     select '00000000-0000-0000-0000-000000000002', id from roles
-    where name in ('APROVADOR')
+    where name in ('COORDENADOR')
     on conflict do nothing;
 
     insert into limit_policies(scope_type, scope_id, max_amount, period_window, double_approval_from, active)

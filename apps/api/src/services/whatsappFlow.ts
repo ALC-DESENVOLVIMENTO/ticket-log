@@ -1,0 +1,1064 @@
+import {
+  buildRequestIdempotencyKey,
+  evaluateLimitPolicy,
+  isValidBrazilianPlate,
+  isValidCpf,
+  maskCpf,
+  normalizeCpf,
+  normalizePlate,
+  parseMoneyToCents,
+  centsToAmount,
+  type VehicleGroup,
+} from "@ticketlog/domain";
+import {
+  appendMaskedAuditEvent,
+  createRequest,
+  findRequestNotification,
+  getActiveRequestByPlate,
+  getPrimaryAuthorizedPhoneByUserId,
+  getRequest,
+  getRequestNotificationContext,
+  getUserContext,
+  getVehicleByPlate,
+  getWhatsappSessionByPhone,
+  hasAuthorizedPhoneForUser,
+  isAuthorizedPhoneForUser,
+  listCoordinatorsByScope,
+  markRequestNotification,
+  recordWhatsappAuthAttempt,
+  recordWhatsappMessage,
+  transitionRequest,
+  upsertWhatsappSession,
+  findUserByCpf,
+  type DbRequest,
+  type DbUserContext,
+  rejectRequest,
+} from "@ticketlog/db";
+import type { WhatsappProvider } from "@ticketlog/whatsapp";
+import { enqueueLimitRequest } from "@ticketlog/queue";
+import { config } from "../config.js";
+import { verifyTotpCode } from "../mfa.js";
+import { resolveAccessProfile } from "../roles.js";
+import { decryptText } from "../security.js";
+
+export type WhatsappConversationState =
+  | "INICIO"
+  | "AGUARDANDO_CPF"
+  | "AGUARDANDO_MFA"
+  | "AUTENTICADO"
+  | "AGUARDANDO_PLACA"
+  | "AGUARDANDO_VALOR"
+  | "AGUARDANDO_CONFIRMACAO"
+  | "PROCESSANDO"
+  | "PENDENTE_APROVACAO"
+  | "CONCLUIDO"
+  | "ERRO"
+  | "EXPIRADO";
+
+interface PendingInput {
+  plate: string;
+  amountCents: number;
+  vehicleGroup: VehicleGroup;
+}
+
+export interface WhatsappFlowDependencies {
+  appendMaskedAuditEvent: typeof appendMaskedAuditEvent;
+  createRequest: typeof createRequest;
+  findRequestNotification: typeof findRequestNotification;
+  getActiveRequestByPlate: typeof getActiveRequestByPlate;
+  getPrimaryAuthorizedPhoneByUserId: typeof getPrimaryAuthorizedPhoneByUserId;
+  getRequest: typeof getRequest;
+  getRequestNotificationContext: typeof getRequestNotificationContext;
+  getUserContext: typeof getUserContext;
+  getVehicleByPlate: typeof getVehicleByPlate;
+  getWhatsappSessionByPhone: typeof getWhatsappSessionByPhone;
+  hasAuthorizedPhoneForUser: typeof hasAuthorizedPhoneForUser;
+  isAuthorizedPhoneForUser: typeof isAuthorizedPhoneForUser;
+  listCoordinatorsByScope: typeof listCoordinatorsByScope;
+  markRequestNotification: typeof markRequestNotification;
+  recordWhatsappAuthAttempt: typeof recordWhatsappAuthAttempt;
+  recordWhatsappMessage: typeof recordWhatsappMessage;
+  transitionRequest: typeof transitionRequest;
+  upsertWhatsappSession: typeof upsertWhatsappSession;
+  findUserByCpf: typeof findUserByCpf;
+  rejectRequest: typeof rejectRequest;
+  enqueueLimitRequest: typeof enqueueLimitRequest;
+  decryptText: typeof decryptText;
+  verifyTotpCode: typeof verifyTotpCode;
+}
+
+const defaultWhatsappFlowDependencies: WhatsappFlowDependencies = {
+  appendMaskedAuditEvent,
+  createRequest,
+  findRequestNotification,
+  getActiveRequestByPlate,
+  getPrimaryAuthorizedPhoneByUserId,
+  getRequest,
+  getRequestNotificationContext,
+  getUserContext,
+  getVehicleByPlate,
+  getWhatsappSessionByPhone,
+  hasAuthorizedPhoneForUser,
+  isAuthorizedPhoneForUser,
+  listCoordinatorsByScope,
+  markRequestNotification,
+  recordWhatsappAuthAttempt,
+  recordWhatsappMessage,
+  transitionRequest,
+  upsertWhatsappSession,
+  findUserByCpf,
+  rejectRequest,
+  enqueueLimitRequest,
+  decryptText,
+  verifyTotpCode,
+};
+
+function normalizeMessageText(input: string): string {
+  return input.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+
+function lowerMessage(input: string): string {
+  return normalizeMessageText(input).toLowerCase();
+}
+
+function maskPhone(phoneE164: string): string {
+  if (phoneE164.length <= 4) return "****";
+  return `${phoneE164.slice(0, phoneE164.length - 4)}****`;
+}
+
+function sessionExpiry(now: Date): Date {
+  return new Date(now.getTime() + config.whatsappSessionExpiryMinutes * 60_000);
+}
+
+function currentBucket(now: Date): string {
+  return now.toISOString().slice(0, 13);
+}
+
+function parsePlateAndAmount(text: string): {
+  plate?: string;
+  amountCents?: number;
+  invalidAmount?: boolean;
+} {
+  const normalized = normalizeMessageText(text);
+  const plateMatch = normalized.match(/[A-Za-z]{3}[-\s]?[0-9][A-Za-z0-9][0-9]{2}/);
+  const amountMatch = normalized.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})|(?:R\$\s*)?\d+(?:\.\d{2})?/);
+
+  let amountCents: number | undefined;
+  let invalidAmount = false;
+  if (amountMatch?.[0]) {
+    try {
+      amountCents = parseMoneyToCents(amountMatch[0]);
+    } catch {
+      invalidAmount = true;
+    }
+  }
+
+  return {
+    plate: plateMatch?.[0] ? normalizePlate(plateMatch[0]) : undefined,
+    amountCents,
+    invalidAmount,
+  };
+}
+
+function isCancel(text: string): boolean {
+  return lowerMessage(text) === "cancelar";
+}
+
+function isExit(text: string): boolean {
+  return lowerMessage(text) === "sair";
+}
+
+function isConfirm(text: string): boolean {
+  return ["confirmar", "confirmo", "ok", "sim"].includes(lowerMessage(text));
+}
+
+function buildSuccessMessage(input: {
+  plate: string;
+  previousLimit: number | null;
+  newLimit: number | null;
+  executedAt: Date;
+  protocol: string;
+}): string {
+  return [
+    "Alteracao realizada com sucesso.",
+    `Placa: ${input.plate}`,
+    `Limite anterior: ${formatCurrency(input.previousLimit)}`,
+    `Novo limite: ${formatCurrency(input.newLimit)}`,
+    `Data e hora: ${input.executedAt.toLocaleString("pt-BR")}`,
+    `Protocolo: ${input.protocol}`,
+  ].join("\n");
+}
+
+function formatCurrency(value: number | string | null | undefined): string {
+  const numeric = value === null || value === undefined ? null : Number(value);
+  if (numeric === null || !Number.isFinite(numeric)) return "n/d";
+  return numeric.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+async function sendText(input: {
+  provider: WhatsappProvider;
+  recordWhatsappMessageFn: typeof recordWhatsappMessage;
+  toPhoneE164: string;
+  body: string;
+  requestId?: string;
+  replyToMessageId?: string;
+}): Promise<void> {
+  const sent = await input.provider.sendTextMessage({
+    toPhoneE164: input.toPhoneE164,
+    body: input.body,
+    replyToMessageId: input.replyToMessageId,
+  });
+  await input.recordWhatsappMessageFn({
+    providerMessageId: sent.providerMessageId ?? undefined,
+    phoneE164: input.toPhoneE164,
+    direction: "out",
+    requestId: input.requestId,
+    body: input.body,
+  });
+}
+
+async function notifyCoordinatorApprovalNeeded(input: {
+  provider: WhatsappProvider;
+  deps: WhatsappFlowDependencies;
+  request: DbRequest;
+  requester: DbUserContext;
+  plate: string;
+  requestedAmount: number;
+}): Promise<void> {
+  const coordinators = await input.deps.listCoordinatorsByScope(input.requester.operation_scope ?? "GERAL", input.requester.id);
+  for (const coordinator of coordinators) {
+    const phone = await input.deps.getPrimaryAuthorizedPhoneByUserId(coordinator.id);
+    if (!phone) continue;
+
+    const eventKey = `APPROVAL_NEEDED:${coordinator.id}`;
+    const existing = await input.deps.findRequestNotification({
+      requestId: input.request.id,
+      eventKey,
+      channel: "whatsapp",
+    });
+    if (existing?.status === "sent") continue;
+
+    await sendText({
+      provider: input.provider,
+      recordWhatsappMessageFn: input.deps.recordWhatsappMessage,
+      toPhoneE164: phone,
+      requestId: input.request.id,
+      body: [
+        "Solicitacao pendente de aprovacao.",
+        `Protocolo: ${input.request.id}`,
+        `Solicitante: ${input.requester.name}`,
+        `Placa: ${input.plate}`,
+        `Valor solicitado: ${formatCurrency(input.requestedAmount)}`,
+        `Acesse o painel para aprovar ou rejeitar: ${config.appBaseUrl}`,
+      ].join("\n"),
+    });
+    await input.deps.markRequestNotification({
+      requestId: input.request.id,
+      eventKey,
+      channel: "whatsapp",
+      recipientPhoneE164: phone,
+      status: "sent",
+    });
+  }
+}
+
+async function resetSession(
+  deps: WhatsappFlowDependencies,
+  phoneE164: string,
+  lastMessageId?: string,
+): Promise<void> {
+  await deps.upsertWhatsappSession({
+    phoneE164,
+    state: "AGUARDANDO_CPF",
+    expiresAt: sessionExpiry(new Date()),
+    lastMessageId,
+  });
+}
+
+async function resolvePendingInput(
+  deps: WhatsappFlowDependencies,
+  user: DbUserContext,
+  current: PendingInput | null,
+  text: string,
+): Promise<{ pending: PendingInput | null; message?: string }> {
+  const parsed = parsePlateAndAmount(text);
+  const pending = current ? { ...current } : ({ plate: "", amountCents: 0, vehicleGroup: "GERAL_DE_RESTRICOES" } as PendingInput);
+
+  if (parsed.plate) {
+    if (!isValidBrazilianPlate(parsed.plate)) {
+      return { pending: null, message: "Placa invalida. Envie no formato ABC1234 ou ABC1D23." };
+    }
+
+    const vehicle = await deps.getVehicleByPlate(parsed.plate);
+    if (!vehicle) {
+      return { pending: null, message: "Veiculo nao localizado. Envie uma nova placa." };
+    }
+    if (vehicle.operation_scope && vehicle.operation_scope !== user.operation_scope) {
+      return { pending: null, message: "Voce nao possui permissao para solicitar alteracao desse veiculo." };
+    }
+
+    pending.plate = parsed.plate;
+    pending.vehicleGroup = (vehicle.vehicle_group as VehicleGroup | null) ?? "GERAL_DE_RESTRICOES";
+  }
+
+  if (parsed.invalidAmount) {
+    return { pending: null, message: "Valor invalido. Envie no formato 10,00 ou 150,50." };
+  }
+
+  if (parsed.amountCents) {
+    pending.amountCents = parsed.amountCents;
+  }
+
+  if (!pending.plate) {
+    return { pending: null, message: "Informe a placa do veiculo." };
+  }
+  if (!pending.amountCents) {
+    return { pending: { ...pending }, message: "Informe o novo limite desejado no formato 10,00." };
+  }
+
+  const policy = evaluateLimitPolicy(
+    centsToAmount(pending.amountCents),
+    config.groupPolicies[pending.vehicleGroup],
+  );
+  if (!policy.allowed) {
+    return {
+      pending: null,
+      message: "Valor acima da politica permitida para esse grupo. Envie um novo valor.",
+    };
+  }
+
+  return { pending };
+}
+
+export class WhatsappFlowService {
+  private readonly deps: WhatsappFlowDependencies;
+
+  constructor(
+    private readonly provider: WhatsappProvider,
+    deps: Partial<WhatsappFlowDependencies> = {},
+  ) {
+    this.deps = { ...defaultWhatsappFlowDependencies, ...deps };
+  }
+
+  async handleInboundMessage(input: {
+    providerMessageId: string;
+    phoneE164: string;
+    text: string;
+  }): Promise<void> {
+    const now = new Date();
+    const normalizedText = normalizeMessageText(input.text);
+    let session = await this.deps.getWhatsappSessionByPhone(input.phoneE164);
+
+    if (!session) {
+      session = await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AGUARDANDO_CPF",
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: [
+          `Bem-vindo ao atendimento de abastecimento da ${config.companyName}.`,
+          "Para solicitar alteracao de limite, envie seu CPF.",
+        ].join("\n"),
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (session.locked_until && new Date(session.locked_until).getTime() > now.getTime()) {
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: `A autenticacao foi bloqueada temporariamente. Tente novamente apos ${new Date(session.locked_until).toLocaleTimeString("pt-BR")}.`,
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (new Date(session.expires_at).getTime() <= now.getTime()) {
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "EXPIRADO",
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Sua sessao expirou por inatividade. Envie seu CPF para autenticar novamente.",
+        replyToMessageId: input.providerMessageId,
+      });
+      session = await this.deps.getWhatsappSessionByPhone(input.phoneE164);
+      if (!session) return;
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AGUARDANDO_CPF",
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (isExit(normalizedText)) {
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await this.deps.appendMaskedAuditEvent({
+        actorUserId: session.authenticated_user_id ?? undefined,
+        eventType: "WHATSAPP_SESSION_CLOSED",
+        phoneE164: input.phoneE164,
+        payload: { state: session.state },
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Sessao encerrada. Quando quiser iniciar de novo, envie seu CPF.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (isCancel(normalizedText)) {
+      if (session.active_request_id) {
+        const currentRequest = await this.deps.getRequest(session.active_request_id);
+        if (currentRequest && ["AGUARDANDO_APROVACAO", "AGUARDANDO_SEGUNDA_APROVACAO", "NA_FILA"].includes(currentRequest.status)) {
+          await this.deps.transitionRequest(currentRequest.id, "CANCELADA", session.authenticated_user_id ?? undefined);
+        }
+      }
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Solicitacao cancelada. Envie seu CPF para iniciar uma nova solicitacao.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    switch (session.state as WhatsappConversationState) {
+      case "INICIO":
+      case "AGUARDANDO_CPF":
+      case "EXPIRADO":
+        await this.handleCpfStep(session, input, normalizedText, now);
+        return;
+      case "AGUARDANDO_MFA":
+        await this.handleMfaStep(session, input, normalizedText, now);
+        return;
+      case "AUTENTICADO":
+      case "AGUARDANDO_PLACA":
+      case "AGUARDANDO_VALOR":
+      case "AGUARDANDO_CONFIRMACAO":
+        await this.handleRequestStep(session, input, normalizedText, now);
+        return;
+      case "PROCESSANDO":
+      case "PENDENTE_APROVACAO":
+      case "CONCLUIDO":
+      case "ERRO":
+      default:
+        await this.handleStatusStep(session, input, now);
+        return;
+    }
+  }
+
+  private async handleCpfStep(
+    session: Awaited<ReturnType<typeof getWhatsappSessionByPhone>> extends infer T ? Exclude<T, null> : never,
+    input: { providerMessageId: string; phoneE164: string; text: string },
+    text: string,
+    now: Date,
+  ): Promise<void> {
+    const cpf = normalizeCpf(text);
+    if (!isValidCpf(cpf)) {
+      const attempts = session.failed_cpf_attempts + 1;
+      const lockedUntil = attempts >= config.whatsappMaxAuthAttempts
+        ? new Date(now.getTime() + config.whatsappTemporaryBlockMinutes * 60_000)
+        : null;
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AGUARDANDO_CPF",
+        failedCpfAttempts: attempts,
+        failedMfaAttempts: 0,
+        authenticationAttempts: attempts,
+        lockedUntil,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+      });
+      await this.deps.recordWhatsappAuthAttempt({
+        sessionId: session.id,
+        phoneE164: input.phoneE164,
+        attemptKind: "CPF",
+        success: false,
+        cpf,
+        errorCode: "INVALID_CPF",
+        blockedUntil: lockedUntil,
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: lockedUntil
+          ? "CPF invalido. As tentativas foram bloqueadas temporariamente por seguranca."
+          : "CPF invalido. Envie novamente apenas os 11 digitos.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const user = await this.deps.findUserByCpf(cpf);
+    if (!user) {
+      await this.deps.recordWhatsappAuthAttempt({
+        sessionId: session.id,
+        phoneE164: input.phoneE164,
+        attemptKind: "CPF",
+        success: false,
+        cpf,
+        errorCode: "USER_NOT_FOUND",
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "CPF nao autorizado para este atendimento.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const context = await this.deps.getUserContext(user.id);
+    if (!context || !resolveAccessProfile(context).canCreateWhatsappRequest) {
+      await this.deps.recordWhatsappAuthAttempt({
+        sessionId: session.id,
+        phoneE164: input.phoneE164,
+        attemptKind: "CPF",
+        success: false,
+        cpf,
+        userId: user.id,
+        errorCode: "ROLE_NOT_ALLOWED",
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Seu perfil nao possui permissao para solicitar alteracoes por este canal.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const hasAuthorizedPhone = await this.deps.hasAuthorizedPhoneForUser(context.id);
+    if (hasAuthorizedPhone && !(await this.deps.isAuthorizedPhoneForUser(context.id, input.phoneE164))) {
+      await this.deps.recordWhatsappAuthAttempt({
+        sessionId: session.id,
+        phoneE164: input.phoneE164,
+        attemptKind: "CPF",
+        success: false,
+        cpf,
+        userId: context.id,
+        errorCode: "PHONE_NOT_AUTHORIZED",
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Este numero de WhatsApp nao esta autorizado para o CPF informado.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    await this.deps.recordWhatsappAuthAttempt({
+      sessionId: session.id,
+      phoneE164: input.phoneE164,
+      attemptKind: "CPF",
+      success: true,
+      cpf,
+      userId: context.id,
+    });
+    await this.deps.appendMaskedAuditEvent({
+      actorUserId: context.id,
+      eventType: "WHATSAPP_CPF_VALIDATED",
+      phoneE164: input.phoneE164,
+      cpf,
+      payload: {
+        userId: context.id,
+        role: context.roles.join(","),
+      },
+    });
+    await this.deps.upsertWhatsappSession({
+      phoneE164: input.phoneE164,
+      state: "AGUARDANDO_MFA",
+      authenticatedUserId: context.id,
+      cpf,
+      failedCpfAttempts: 0,
+      failedMfaAttempts: 0,
+      authenticationAttempts: 0,
+      expiresAt: sessionExpiry(now),
+      lastMessageId: input.providerMessageId,
+      metadata: {},
+    });
+    await sendText({
+      provider: this.provider,
+      recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+      toPhoneE164: input.phoneE164,
+      body: `CPF ${maskCpf(cpf)} validado. Agora envie o codigo de 6 digitos do Google Authenticator.`,
+      replyToMessageId: input.providerMessageId,
+    });
+  }
+
+  private async handleMfaStep(
+    session: Awaited<ReturnType<typeof getWhatsappSessionByPhone>> extends infer T ? Exclude<T, null> : never,
+    input: { providerMessageId: string; phoneE164: string; text: string },
+    text: string,
+    now: Date,
+  ): Promise<void> {
+    const user = session.authenticated_user_id ? await this.deps.getUserContext(session.authenticated_user_id) : null;
+    if (!user || !user.mfa_secret_encrypted || !user.mfa_enabled) {
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Nao foi possivel validar sua autenticacao. Envie seu CPF para reiniciar.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const code = text.replace(/\D/g, "");
+    const secret = this.deps.decryptText(user.mfa_secret_encrypted);
+    const valid = this.deps.verifyTotpCode({ token: code, secret });
+    if (!valid) {
+      const attempts = session.failed_mfa_attempts + 1;
+      const lockedUntil = attempts >= config.whatsappMaxAuthAttempts
+        ? new Date(now.getTime() + config.whatsappTemporaryBlockMinutes * 60_000)
+        : null;
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AGUARDANDO_MFA",
+        authenticatedUserId: user.id,
+        pendingVehiclePlate: session.pending_vehicle_plate,
+        pendingAmountCents: session.pending_amount_cents,
+        failedCpfAttempts: session.failed_cpf_attempts,
+        failedMfaAttempts: attempts,
+        authenticationAttempts: attempts,
+        lockedUntil,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: session.metadata,
+      });
+      await this.deps.recordWhatsappAuthAttempt({
+        sessionId: session.id,
+        phoneE164: input.phoneE164,
+        attemptKind: "MFA",
+        success: false,
+        userId: user.id,
+        errorCode: "INVALID_MFA",
+        blockedUntil: lockedUntil,
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: lockedUntil
+          ? "Codigo MFA invalido. A autenticacao foi bloqueada temporariamente por seguranca."
+          : "Codigo MFA invalido. Envie novamente o codigo de 6 digitos do Google Authenticator.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    await this.deps.recordWhatsappAuthAttempt({
+      sessionId: session.id,
+      phoneE164: input.phoneE164,
+      attemptKind: "MFA",
+      success: true,
+      userId: user.id,
+    });
+    await this.deps.appendMaskedAuditEvent({
+      actorUserId: user.id,
+      eventType: "WHATSAPP_AUTHENTICATED",
+      phoneE164: input.phoneE164,
+      payload: {
+        userId: user.id,
+        role: user.roles.join(","),
+      },
+    });
+    await this.deps.upsertWhatsappSession({
+      phoneE164: input.phoneE164,
+      state: "AUTENTICADO",
+      authenticatedUserId: user.id,
+      pendingVehiclePlate: null,
+      pendingAmountCents: null,
+      failedCpfAttempts: 0,
+      failedMfaAttempts: 0,
+      authenticationAttempts: 0,
+      lockedUntil: null,
+      authenticatedAt: now,
+      expiresAt: sessionExpiry(now),
+      lastMessageId: input.providerMessageId,
+      metadata: {},
+    });
+    await sendText({
+      provider: this.provider,
+      recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+      toPhoneE164: input.phoneE164,
+      body: "Autenticacao confirmada. Envie a placa e o valor do novo limite. Exemplo: PWH4E85 10,00",
+      replyToMessageId: input.providerMessageId,
+    });
+  }
+
+  private async handleRequestStep(
+    session: Awaited<ReturnType<typeof getWhatsappSessionByPhone>> extends infer T ? Exclude<T, null> : never,
+    input: { providerMessageId: string; phoneE164: string; text: string },
+    text: string,
+    now: Date,
+  ): Promise<void> {
+    const user = session.authenticated_user_id ? await this.deps.getUserContext(session.authenticated_user_id) : null;
+    if (!user) {
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Sua sessao precisa ser autenticada novamente. Envie seu CPF.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const pendingFromSession =
+      session.pending_vehicle_plate && session.pending_amount_cents
+        ? ({
+            plate: session.pending_vehicle_plate,
+            amountCents: Number(session.pending_amount_cents),
+            vehicleGroup: ((session.metadata?.vehicleGroup as VehicleGroup | undefined) ?? "GERAL_DE_RESTRICOES"),
+          } as PendingInput)
+        : session.pending_vehicle_plate
+          ? ({
+              plate: session.pending_vehicle_plate,
+              amountCents: 0,
+              vehicleGroup: ((session.metadata?.vehicleGroup as VehicleGroup | undefined) ?? "GERAL_DE_RESTRICOES"),
+            } as PendingInput)
+          : null;
+
+    if ((session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO" && !isConfirm(text)) {
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Responda CONFIRMAR para continuar ou CANCELAR para encerrar a solicitacao.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if ((session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO" && isConfirm(text)) {
+      if (!pendingFromSession) {
+        await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+        await sendText({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          body: "Nao encontrei os dados pendentes da solicitacao. Envie a placa e o valor novamente.",
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
+
+      const activeRequest = await this.deps.getActiveRequestByPlate(pendingFromSession.plate);
+      if (activeRequest) {
+        await sendText({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          body: `Ja existe uma operacao em andamento para a placa ${pendingFromSession.plate}. Protocolo atual: ${activeRequest.id}.`,
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
+
+      const amount = centsToAmount(pendingFromSession.amountCents);
+      const policy = evaluateLimitPolicy(amount, config.groupPolicies[pendingFromSession.vehicleGroup]);
+      const request = await this.deps.createRequest({
+        idempotencyKey: buildRequestIdempotencyKey({
+          requesterId: user.id,
+          vehiclePlate: pendingFromSession.plate,
+          vehicleGroup: pendingFromSession.vehicleGroup,
+          requestedAmount: amount,
+          bucket: currentBucket(now),
+        }),
+        vehiclePlate: pendingFromSession.plate,
+        vehicleGroup: pendingFromSession.vehicleGroup,
+        requestedAmount: amount,
+        requesterId: user.id,
+        channel: "whatsapp",
+        status: policy.requiresSecondApproval ? "AGUARDANDO_SEGUNDA_APROVACAO" : "NA_FILA",
+        expiresAt: new Date(now.getTime() + config.approvalTtlMinutes * 60_000),
+      });
+
+      await this.deps.appendMaskedAuditEvent({
+        requestId: request.id,
+        actorUserId: user.id,
+        phoneE164: input.phoneE164,
+        eventType: "WHATSAPP_REQUEST_CREATED",
+        payload: {
+          userId: user.id,
+          name: user.name,
+          profile: user.roles.join(","),
+          plate: pendingFromSession.plate,
+          requestedAmount: amount,
+          origin: "WHATSAPP",
+        },
+      });
+
+      if (policy.requiresSecondApproval) {
+        await notifyCoordinatorApprovalNeeded({
+          provider: this.provider,
+          deps: this.deps,
+          request,
+          requester: user,
+          plate: pendingFromSession.plate,
+          requestedAmount: amount,
+        });
+        await this.deps.upsertWhatsappSession({
+          phoneE164: input.phoneE164,
+          state: "PENDENTE_APROVACAO",
+          authenticatedUserId: user.id,
+          activeRequestId: request.id,
+          pendingVehiclePlate: null,
+          pendingAmountCents: null,
+          failedCpfAttempts: 0,
+          failedMfaAttempts: 0,
+          authenticationAttempts: 0,
+          authenticatedAt: session.authenticated_at ?? now,
+          expiresAt: sessionExpiry(now),
+          lastMessageId: input.providerMessageId,
+          metadata: {},
+        });
+        await sendText({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          requestId: request.id,
+          body: [
+            "Solicitacao registrada e aguardando aprovacao do coordenador.",
+            `Placa: ${pendingFromSession.plate}`,
+            `Valor solicitado: ${formatCurrency(amount)}`,
+            `Protocolo: ${request.id}`,
+          ].join("\n"),
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
+
+      await this.deps.enqueueLimitRequest(request.id);
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "PROCESSANDO",
+        authenticatedUserId: user.id,
+        activeRequestId: request.id,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at ?? now,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        requestId: request.id,
+        body: [
+          "Solicitacao recebida e em processamento.",
+          `Placa: ${pendingFromSession.plate}`,
+          `Valor solicitado: ${formatCurrency(amount)}`,
+          `Protocolo: ${request.id}`,
+        ].join("\n"),
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    const resolved = await resolvePendingInput(this.deps, user, pendingFromSession, text);
+    if (resolved.message) {
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state:
+          pendingFromSession?.plate && !pendingFromSession?.amountCents
+            ? "AGUARDANDO_VALOR"
+            : "AGUARDANDO_PLACA",
+        authenticatedUserId: user.id,
+        pendingVehiclePlate: resolved.pending?.plate ?? pendingFromSession?.plate ?? null,
+        pendingAmountCents: resolved.pending?.amountCents ?? pendingFromSession?.amountCents ?? null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at ?? now,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: resolved.pending ? { vehicleGroup: resolved.pending.vehicleGroup } : session.metadata,
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: resolved.message,
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if (!resolved.pending) {
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Nao consegui entender os dados. Envie a placa e o valor no formato PWH4E85 10,00.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    await this.deps.upsertWhatsappSession({
+      phoneE164: input.phoneE164,
+      state: "AGUARDANDO_CONFIRMACAO",
+      authenticatedUserId: user.id,
+      pendingVehiclePlate: resolved.pending.plate,
+      pendingAmountCents: resolved.pending.amountCents,
+      failedCpfAttempts: 0,
+      failedMfaAttempts: 0,
+      authenticationAttempts: 0,
+      authenticatedAt: session.authenticated_at ?? now,
+      expiresAt: sessionExpiry(now),
+      lastMessageId: input.providerMessageId,
+      metadata: { vehicleGroup: resolved.pending.vehicleGroup },
+    });
+    await sendText({
+      provider: this.provider,
+      recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+      toPhoneE164: input.phoneE164,
+      body: [
+        "Confirme os dados da solicitacao:",
+        `Placa: ${resolved.pending.plate}`,
+        `Novo limite solicitado: ${formatCurrency(centsToAmount(resolved.pending.amountCents))}`,
+        `Grupo: ${resolved.pending.vehicleGroup}`,
+        "Responda CONFIRMAR para continuar ou CANCELAR para encerrar.",
+      ].join("\n"),
+      replyToMessageId: input.providerMessageId,
+    });
+  }
+
+  private async handleStatusStep(
+    session: Awaited<ReturnType<typeof getWhatsappSessionByPhone>> extends infer T ? Exclude<T, null> : never,
+    input: { providerMessageId: string; phoneE164: string },
+    now: Date,
+  ): Promise<void> {
+    const request = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
+    if (!request) {
+      await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AUTENTICADO",
+        authenticatedUserId: session.authenticated_user_id,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Envie a placa e o valor do novo limite para iniciar outra solicitacao.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    await sendText({
+      provider: this.provider,
+      recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+      toPhoneE164: input.phoneE164,
+      requestId: request.id,
+      body: [
+        `Protocolo: ${request.id}`,
+        `Status atual: ${request.status}`,
+        `Placa: ${request.vehicle_plate}`,
+        `Valor solicitado: ${formatCurrency(request.requested_amount)}`,
+      ].join("\n"),
+      replyToMessageId: input.providerMessageId,
+    });
+  }
+}
+
+export async function notifyWhatsappRequestResolved(input: {
+  provider: WhatsappProvider;
+  requestId: string;
+}): Promise<void> {
+  const context = await getRequestNotificationContext(input.requestId);
+  if (!context || context.request.channel !== "whatsapp" || !context.requesterPhoneE164) return;
+
+  const status = context.request.status;
+  const eventKey = status === "CONCLUIDA" ? "REQUEST_COMPLETED" : `REQUEST_STATUS:${status}`;
+  const existing = await findRequestNotification({
+    requestId: context.request.id,
+    eventKey,
+    channel: "whatsapp",
+  });
+  if (existing?.status === "sent") return;
+
+  const message =
+    status === "CONCLUIDA"
+      ? buildSuccessMessage({
+          plate: context.request.vehicle_plate,
+          previousLimit: context.request.previous_limit === null ? null : Number(context.request.previous_limit),
+          newLimit: context.request.new_limit === null ? null : Number(context.request.new_limit),
+          executedAt: new Date(),
+          protocol: context.request.id,
+        })
+      : "Nao foi possivel concluir a alteracao neste momento. Entre em contato novamente daqui a 30 minutos.";
+
+  await sendText({
+    provider: input.provider,
+    recordWhatsappMessageFn: recordWhatsappMessage,
+    toPhoneE164: context.requesterPhoneE164,
+    requestId: context.request.id,
+    body: message,
+  });
+  await markRequestNotification({
+    requestId: context.request.id,
+    eventKey,
+    channel: "whatsapp",
+    recipientPhoneE164: context.requesterPhoneE164,
+    status: "sent",
+  });
+}
+
+export async function rejectPendingRequestByCoordinator(input: {
+  requestId: string;
+  approverId: string;
+  justification: string;
+  provider: WhatsappProvider;
+}): Promise<DbRequest> {
+  const request = await rejectRequest({
+    requestId: input.requestId,
+    approverId: input.approverId,
+    justification: input.justification,
+  });
+  await notifyWhatsappRequestResolved({
+    provider: input.provider,
+    requestId: request.id,
+  });
+  return request;
+}

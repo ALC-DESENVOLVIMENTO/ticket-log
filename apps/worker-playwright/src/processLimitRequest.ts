@@ -20,6 +20,7 @@ import {
   handleTicketLogOperationalEvent,
   updateOperationalRuntime,
 } from "./operationalRuntime.js";
+import { notifyWhatsappResolvedRequest } from "./whatsappNotifier.js";
 
 type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
 
@@ -134,6 +135,7 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
       await transitionRequest(requestId, "EVA_LIBERADA");
       await transitionRequest(requestId, "CONCLUIDA");
+      await notifyWhatsappResolvedRequest(requestId);
       await updateOperationalRuntime({
         workerStatus: "IDLE",
         sessionStatus: "SESSION_READY",
@@ -173,6 +175,7 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
     await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
     await transitionRequest(requestId, "EVA_LIBERADA");
     await transitionRequest(requestId, "CONCLUIDA");
+    await notifyWhatsappResolvedRequest(requestId);
     console.info({ requestId }, "processLimitRequest:completed");
 
     await appendAuditEvent({
@@ -206,6 +209,9 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       "processLimitRequest:error",
     );
     const shouldRetry = await classifyFailure(requestId, error, currentStep);
+    if (!shouldRetry) {
+      await notifyWhatsappResolvedRequest(requestId).catch(() => undefined);
+    }
     const authenticationRequired = isAuthenticationIntervention(error);
     await updateOperationalRuntime({
       workerStatus: error instanceof ManualInterventionError ? "WAITING_OPERATOR" : "IDLE",

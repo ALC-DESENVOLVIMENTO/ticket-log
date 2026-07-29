@@ -5,6 +5,9 @@ create table if not exists users (
   name text not null,
   employee_number text unique not null,
   corporate_email text unique not null,
+  cpf_hash text unique,
+  cpf_last4 text,
+  operation_scope text not null default 'GERAL',
   password_hash text,
   password_changed_at timestamptz,
   mfa_secret_encrypted bytea,
@@ -16,6 +19,9 @@ create table if not exists users (
 );
 
 alter table if exists users
+  add column if not exists cpf_hash text,
+  add column if not exists cpf_last4 text,
+  add column if not exists operation_scope text not null default 'GERAL',
   add column if not exists password_hash text,
   add column if not exists password_changed_at timestamptz,
   add column if not exists mfa_secret_encrypted bytea,
@@ -71,6 +77,7 @@ create table if not exists vehicles (
   id uuid primary key default gen_random_uuid(),
   plate text unique not null,
   vehicle_group text,
+  operation_scope text,
   status text,
   current_limit numeric(12,2),
   updated_at timestamptz not null default now()
@@ -106,7 +113,8 @@ create table if not exists requests (
 );
 
 alter table if exists vehicles
-  add column if not exists vehicle_group text;
+  add column if not exists vehicle_group text,
+  add column if not exists operation_scope text;
 
 alter table if exists requests
   add column if not exists vehicle_group text not null default 'GERAL_DE_RESTRICOES';
@@ -127,10 +135,14 @@ create table if not exists approvals (
   approver_id uuid not null references users(id),
   level int not null,
   decision text not null,
+  justification text,
   decided_at timestamptz not null default now(),
   unique (request_id, approver_id),
   unique (request_id, level)
 );
+
+alter table if exists approvals
+  add column if not exists justification text;
 
 create table if not exists automation_steps (
   id uuid primary key default gen_random_uuid(),
@@ -177,6 +189,79 @@ create table if not exists whatsapp_messages (
   body text,
   received_at timestamptz not null default now()
 );
+
+create table if not exists whatsapp_sessions (
+  id uuid primary key default gen_random_uuid(),
+  phone_e164 text unique not null,
+  state text not null,
+  authenticated_user_id uuid references users(id),
+  active_request_id uuid references requests(id),
+  pending_vehicle_plate text,
+  pending_amount_cents bigint,
+  cpf_hash text,
+  cpf_last4 text,
+  failed_cpf_attempts int not null default 0,
+  failed_mfa_attempts int not null default 0,
+  authentication_attempts int not null default 0,
+  locked_until timestamptz,
+  authenticated_at timestamptz,
+  expires_at timestamptz not null,
+  last_message_id text,
+  last_interaction_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_whatsapp_sessions_state_expires
+  on whatsapp_sessions(state, expires_at);
+
+create table if not exists whatsapp_auth_attempts (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references whatsapp_sessions(id),
+  phone_e164 text not null,
+  attempt_kind text not null,
+  success boolean not null,
+  cpf_hash text,
+  cpf_last4 text,
+  user_id uuid references users(id),
+  error_code text,
+  blocked_until timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_whatsapp_auth_attempts_phone_created
+  on whatsapp_auth_attempts(phone_e164, created_at desc);
+
+create table if not exists request_status_history (
+  id uuid primary key default gen_random_uuid(),
+  request_id uuid not null references requests(id),
+  from_status text,
+  to_status text not null,
+  actor_user_id uuid references users(id),
+  origin text not null default 'SYSTEM',
+  reason_code text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_request_status_history_request_created
+  on request_status_history(request_id, created_at desc);
+
+create table if not exists request_notifications (
+  id uuid primary key default gen_random_uuid(),
+  request_id uuid not null references requests(id),
+  event_key text not null,
+  channel text not null,
+  recipient_phone_e164 text,
+  provider_message_id text,
+  status text not null default 'pending',
+  created_at timestamptz not null default now(),
+  sent_at timestamptz,
+  unique (request_id, event_key, channel)
+);
+
+create index if not exists idx_request_notifications_request_created
+  on request_notifications(request_id, created_at desc);
 
 create table if not exists platform_sessions (
   id uuid primary key default gen_random_uuid(),
@@ -244,13 +329,16 @@ create index if not exists idx_audit_request_created on audit_events(request_id,
 create unique index if not exists uq_whatsapp_provider_msg on whatsapp_messages(provider_message_id);
 create unique index if not exists uq_active_limit_policy_scope on limit_policies(scope_type) where active is true;
 
-insert into roles(name) values ('SOLICITANTE'), ('APROVADOR'), ('ADMINISTRADOR')
+insert into roles(name) values ('SUPERVISOR'), ('COORDENADOR'), ('SOLICITANTE'), ('APROVADOR'), ('ADMINISTRADOR')
 on conflict (name) do nothing;
 
 insert into permissions(key) values
+  ('request:view:self'),
+  ('request:view:scope'),
   ('request:create'),
   ('request:approve'),
   ('request:second-approve'),
+  ('request:reject'),
   ('request:retry'),
   ('admin:users'),
   ('admin:policies'),

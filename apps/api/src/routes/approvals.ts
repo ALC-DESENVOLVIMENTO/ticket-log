@@ -4,13 +4,25 @@ import {
   getActiveRequestByPlate,
   getApprovalRequestByToken,
   getRequest,
+  getRequestVisibleToUser,
+  getUserContext,
   recordApproval,
+  rejectRequest,
   transitionRequest,
 } from "@ticketlog/db";
 import { enqueueLimitRequest } from "@ticketlog/queue";
 import { evaluateLimitPolicy } from "@ticketlog/domain";
 import { getAuthenticatedUser } from "../auth.js";
 import { config } from "../config.js";
+import { assertCanApproveRequest, resolveAccessProfile } from "../roles.js";
+import { createWhatsappProvider } from "@ticketlog/whatsapp";
+import { notifyWhatsappRequestResolved } from "../services/whatsappFlow.js";
+
+const whatsappProvider = createWhatsappProvider({
+  apiBaseUrl: config.whatsappApiBaseUrl,
+  phoneNumberId: config.whatsappPhoneNumberId,
+  accessToken: config.whatsappAccessToken,
+});
 
 async function enqueueIfConfigured(
   app: FastifyInstance,
@@ -111,9 +123,20 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/requests/:id/second-approval", async (request, reply) => {
-    const user = await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanApproveRequest(user);
     const params = request.params as { id: string };
-    const found = await getRequest(params.id);
+    const access = resolveAccessProfile(user);
+    const found = access.isAdmin
+      ? await getRequest(params.id)
+      : await getRequestVisibleToUser({
+          requestId: params.id,
+          userId: user.id,
+          includeScope: access.canViewScopeRequests,
+          operationScope: user.operation_scope,
+        });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     if (found.requester_id === user.id) {
       return reply.code(403).send({ error: "REQUESTER_CANNOT_SECOND_APPROVE" });
@@ -131,5 +154,44 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
     await transitionRequest(found.id, "NA_FILA", user.id);
     const queue = await enqueueIfConfigured(app, found.id);
     return { status: "NA_FILA", queue };
+  });
+
+  app.post("/requests/:id/reject", async (request, reply) => {
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanApproveRequest(user);
+    const params = request.params as { id: string };
+    const body = request.body as { justification?: string };
+    if (!body.justification?.trim()) {
+      return reply.code(400).send({ error: "REJECTION_JUSTIFICATION_REQUIRED" });
+    }
+
+    const access = resolveAccessProfile(user);
+    const found = access.isAdmin
+      ? await getRequest(params.id)
+      : await getRequestVisibleToUser({
+          requestId: params.id,
+          userId: user.id,
+          includeScope: access.canViewScopeRequests,
+          operationScope: user.operation_scope,
+        });
+    if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
+    if (found.requester_id === user.id) {
+      return reply.code(403).send({ error: "REQUESTER_CANNOT_REJECT_OWN_REQUEST" });
+    }
+
+    const requestResult = await rejectRequest({
+      requestId: found.id,
+      approverId: user.id,
+      justification: body.justification.trim(),
+    });
+    await notifyWhatsappRequestResolved({
+      provider: whatsappProvider,
+      requestId: requestResult.id,
+    }).catch((error) => {
+      app.log.error({ requestId: requestResult.id, error }, "failed to notify whatsapp after rejection");
+    });
+    return { status: requestResult.status };
   });
 }

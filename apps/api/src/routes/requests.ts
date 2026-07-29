@@ -15,11 +15,15 @@ import {
   getActiveRequestByPlate,
   getPool,
   getRequest,
+  getRequestVisibleToUser,
+  getUserContext,
+  listRequestsVisibleToUser,
   transitionRequest,
 } from "@ticketlog/db";
 import { enqueueLimitRequest } from "@ticketlog/queue";
 import { config } from "../config.js";
 import { getAuthenticatedUser } from "../auth.js";
+import { assertCanCreateWebRequest, resolveAccessProfile } from "../roles.js";
 
 async function enqueueIfConfigured(requestId: string): Promise<{ queued: boolean; reason?: string }> {
   if (!process.env.REDIS_URL) return { queued: false, reason: "REDIS_URL_NOT_CONFIGURED" };
@@ -38,15 +42,31 @@ function currentBucket(): string {
 
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
   app.get("/requests", async (request) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const query = request.query as { limit?: string };
     const limit = Math.max(1, Math.min(query.limit ? Number(query.limit) : 20, 100));
-    const result = await getPool().query("select * from requests order by created_at desc limit $1", [limit]);
-    return { requests: result.rows };
+    const access = resolveAccessProfile(user);
+    if (access.isAdmin) {
+      const result = await getPool().query("select * from requests order by created_at desc limit $1", [limit]);
+      return { requests: result.rows };
+    }
+    return {
+      requests: await listRequestsVisibleToUser({
+        userId: user.id,
+        includeScope: access.canViewScopeRequests,
+        operationScope: user.operation_scope,
+        limit,
+      }),
+    };
   });
 
   app.post("/requests", async (request, reply) => {
-    const user = await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanCreateWebRequest(user);
     const body = request.body as any;
     const vehiclePlate = normalizePlate(String(body.vehiclePlate ?? ""));
     const requestedAmount = Number(body.requestedAmount);
@@ -104,17 +124,37 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/requests/:id", async (request, reply) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
-    const found = await getRequest(params.id);
+    const access = resolveAccessProfile(user);
+    const found = access.isAdmin
+      ? await getRequest(params.id)
+      : await getRequestVisibleToUser({
+          requestId: params.id,
+          userId: user.id,
+          includeScope: access.canViewScopeRequests,
+          operationScope: user.operation_scope,
+        });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     return found;
   });
 
   app.get("/requests/:id/details", async (request, reply) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
-    const found = await getRequest(params.id);
+    const access = resolveAccessProfile(user);
+    const found = access.isAdmin
+      ? await getRequest(params.id)
+      : await getRequestVisibleToUser({
+          requestId: params.id,
+          userId: user.id,
+          includeScope: access.canViewScopeRequests,
+          operationScope: user.operation_scope,
+        });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     const [stepsResult, eventsResult] = await Promise.all([
       getPool().query(
@@ -139,7 +179,9 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/requests/:id/approval-link", async (request, reply) => {
-    const user = await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
     const found = await getRequest(params.id);
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
@@ -167,9 +209,19 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/requests/:id/retry", async (request, reply) => {
-    await getAuthenticatedUser(request);
+    const authUser = await getAuthenticatedUser(request);
+    const user = await getUserContext(authUser.id);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     const params = request.params as { id: string };
-    const found = await getRequest(params.id);
+    const access = resolveAccessProfile(user);
+    const found = access.isAdmin
+      ? await getRequest(params.id)
+      : await getRequestVisibleToUser({
+          requestId: params.id,
+          userId: user.id,
+          includeScope: access.canViewScopeRequests,
+          operationScope: user.operation_scope,
+        });
     if (!found) return reply.code(404).send({ error: "REQUEST_NOT_FOUND" });
     if (!["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL"].includes(found.status)) {
       return reply.code(409).send({ error: "REQUEST_NOT_RETRYABLE" });

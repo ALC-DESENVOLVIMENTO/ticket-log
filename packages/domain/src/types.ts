@@ -2,7 +2,12 @@ export type RequestChannel = "whatsapp" | "web" | "admin";
 
 export type UserStatus = "active" | "disabled";
 
-export type RoleKey = "SOLICITANTE" | "APROVADOR" | "ADMINISTRADOR";
+export type RoleKey =
+  | "SUPERVISOR"
+  | "COORDENADOR"
+  | "SOLICITANTE"
+  | "APROVADOR"
+  | "ADMINISTRADOR";
 
 export type VehicleGroup =
   | "GERAL_DE_RESTRICOES"
