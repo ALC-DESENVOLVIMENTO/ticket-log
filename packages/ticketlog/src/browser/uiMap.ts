@@ -1,11 +1,15 @@
 export const ticketLogUi = {
   home: {
-    labels: /^\s*(?:in.cio|home)\s*$/i,
+    labels: /^\s*(?:in.cio|home|p.gina inicial)\s*$/i,
     selectors: [
       "a[href$='/home']",
       "a[href*='/home?']",
       "[routerlink='/home']",
       "[ng-reflect-router-link='/home']",
+      "a.menu-pagina-inicial:not(.menu-pagina-inicial-carrinho)",
+      "a[href*='GoodManagerSSL/Home2.cfm' i]",
+      "a[title*='Pagina Inicial' i]",
+      "a[title*='Página Inicial' i]",
     ],
   },
   vehicleQuickAccess: {

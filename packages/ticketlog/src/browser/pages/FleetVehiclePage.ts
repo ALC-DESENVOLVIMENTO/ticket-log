@@ -48,9 +48,36 @@ export class FleetVehiclePage {
     await this.dismissBlockingOverlays();
     if (await this.waitForHomeReady(1_500)) return;
 
-    await this.clickHomeEntrypoint();
-    if (!(await this.waitForHomeReady(30_000))) {
+    const uiNavigationError = await this.clickHomeEntrypoint()
+      .then(() => null)
+      .catch((error: unknown) => error);
+    if (!uiNavigationError && (await this.waitForHomeReady(30_000))) {
+      return;
+    }
+
+    const homeUrl = process.env.TICKETLOG_HOME_URL;
+    if (!homeUrl) {
+      if (uiNavigationError instanceof Error) throw uiNavigationError;
       throw new ManualInterventionError("HOME_UI_NAVIGATION_FAILED");
+    }
+
+    console.warn(
+      {
+        currentUrl: this.page.url(),
+        uiNavigationError:
+          uiNavigationError instanceof Error
+            ? uiNavigationError.message
+            : "HOME_UI_NAVIGATION_FAILED",
+      },
+      "ticketlog.navigation:home-direct-fallback",
+    );
+    await this.page.goto(homeUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await this.dismissBlockingOverlays();
+    if (!(await this.waitForHomeReady(30_000))) {
+      throw new ManualInterventionError("HOME_FALLBACK_NAVIGATION_FAILED");
     }
   }
 
@@ -557,6 +584,11 @@ export class FleetVehiclePage {
       if (await this.page.getByText(/acesso r.pido|quick access/i).first().isVisible().catch(() => false)) return true;
 
       const onHomeUrl = /plataforma\.ticketlog\.com\.br\/home(?:$|[?#])/i.test(this.page.url());
+      const onLegacyHome = [this.page, ...this.page.frames()].some((scope) =>
+        /\/GoodManagerSSL\/Home2\.cfm(?:$|[?#])/i.test(scope.url()),
+      );
+      if (onLegacyHome) return true;
+
       const vehicleCardVisible = await this.page
         .getByText(/^\s*(?:ve.culo|vehicle)\s*$/i)
         .first()
