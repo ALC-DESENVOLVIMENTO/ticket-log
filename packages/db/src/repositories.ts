@@ -1067,6 +1067,19 @@ export async function getRequestVisibleToUser(input: {
   return result.rows[0] ?? null;
 }
 
+export async function getLatestWhatsappRequestByRequester(userId: string): Promise<DbRequest | null> {
+  const result = await getPool().query<DbRequest>(
+    `select *
+       from requests
+      where requester_id = $1
+        and channel = 'whatsapp'
+      order by created_at desc
+      limit 1`,
+    [userId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function listCoordinatorsByScope(operationScope: string, excludeUserId?: string): Promise<DbUserContext[]> {
   const result = await getPool().query<DbUser>(
     `select distinct u.*

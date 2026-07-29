@@ -17,14 +17,23 @@ const provider = createWhatsappProvider({
   phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
   accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
 });
+const whatsappConfigured = Boolean(
+  process.env.WHATSAPP_API_BASE_URL && process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.WHATSAPP_ACCESS_TOKEN,
+);
 
 async function sendText(phoneE164: string, body: string, requestId: string): Promise<void> {
+  if (!whatsappConfigured) {
+    throw new Error("WHATSAPP_PROVIDER_NOT_CONFIGURED_IN_WORKER");
+  }
   const sent = await provider.sendTextMessage({
     toPhoneE164: phoneE164,
     body,
   });
+  if (!sent.providerMessageId) {
+    throw new Error("WHATSAPP_PROVIDER_DID_NOT_RETURN_MESSAGE_ID");
+  }
   await recordWhatsappMessage({
-    providerMessageId: sent.providerMessageId ?? undefined,
+    providerMessageId: sent.providerMessageId,
     phoneE164,
     direction: "out",
     requestId,
@@ -58,14 +67,38 @@ export async function notifyWhatsappResolvedRequest(requestId: string): Promise<
           `Data e hora: ${new Date().toLocaleString("pt-BR")}`,
           `Protocolo: ${context.request.id}`,
         ].join("\n")
-      : "Nao foi possivel concluir a alteracao neste momento. Entre em contato novamente daqui a 30 minutos.";
+      : [
+          "Nao foi possivel concluir a alteracao neste momento.",
+          "Entre em contato novamente daqui a 30 minutos.",
+          `Protocolo: ${context.request.id}`,
+          `Placa: ${context.request.vehicle_plate}`,
+        ].join("\n");
 
-  await sendText(context.requesterPhoneE164, body, context.request.id);
-  await markRequestNotification({
-    requestId: context.request.id,
-    eventKey,
-    channel: "whatsapp",
-    recipientPhoneE164: context.requesterPhoneE164,
-    status: "sent",
-  });
+  try {
+    await sendText(context.requesterPhoneE164, body, context.request.id);
+    await markRequestNotification({
+      requestId: context.request.id,
+      eventKey,
+      channel: "whatsapp",
+      recipientPhoneE164: context.requesterPhoneE164,
+      status: "sent",
+    });
+  } catch (error) {
+    console.error(
+      {
+        requestId,
+        eventKey,
+        errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      "whatsappNotifier:send-failed",
+    );
+    await markRequestNotification({
+      requestId: context.request.id,
+      eventKey,
+      channel: "whatsapp",
+      recipientPhoneE164: context.requesterPhoneE164,
+      status: "failed",
+    });
+  }
 }

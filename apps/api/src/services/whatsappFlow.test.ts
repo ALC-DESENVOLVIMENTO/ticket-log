@@ -56,6 +56,7 @@ function createService(partialDeps: Partial<WhatsappFlowDependencies>) {
     getPrimaryAuthorizedPhoneByUserId: async () => "+5511988887777",
     getRequest: async () => null,
     getRequestNotificationContext: async () => null,
+    getLatestWhatsappRequestByRequester: async () => null,
     getUserContext: async () =>
       ({
         id: "user-1",
@@ -384,4 +385,57 @@ test("authenticated session does not treat CPF-like input as amount", async () =
 
   assert.match(sentMessages[0].body, /sessao ja esta autenticada|placa e o valor/i);
   assert.doesNotMatch(sentMessages[0].body, /Valor invalido/i);
+});
+
+test("terminal request remains available for status follow-up", async () => {
+  const terminalRequest = {
+    id: "req-terminal",
+    requester_id: "user-1",
+    vehicle_plate: "PWH4E85",
+    vehicle_group: "UTILITARIOS",
+    requested_amount: "10.00",
+    channel: "whatsapp",
+    status: "RESULTADO_INDETERMINADO",
+    expires_at: new Date(),
+  } as any;
+
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "ERRO",
+        authenticated_user_id: "user-1",
+        active_request_id: "req-terminal",
+        authenticated_at: new Date(),
+      }),
+    getRequest: async (id: string) => (id === "req-terminal" ? terminalRequest : null),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-5",
+    phoneE164: "+5511999999999",
+    text: "?",
+  });
+
+  assert.match(sentMessages[0].body, /Status atual: RESULTADO_INDETERMINADO/i);
+  assert.match(sentMessages[0].body, /PWH4E85/i);
+});
+
+test("new request option from no active status asks directly for plate", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AUTENTICADO",
+        authenticated_user_id: "user-1",
+        active_request_id: null,
+        authenticated_at: new Date(),
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-6",
+    phoneE164: "+5511999999999",
+    text: "op_nova_solicitacao",
+  });
+
+  assert.match(sentMessages[0].body, /Informe a placa do veiculo/i);
 });

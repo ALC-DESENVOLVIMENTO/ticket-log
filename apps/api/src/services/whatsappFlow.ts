@@ -18,6 +18,7 @@ import {
   getPrimaryAuthorizedPhoneByUserId,
   getRequest,
   getRequestNotificationContext,
+  getLatestWhatsappRequestByRequester,
   getUserContext,
   getVehicleByPlate,
   getWhatsappSessionByPhone,
@@ -69,6 +70,7 @@ export interface WhatsappFlowDependencies {
   getPrimaryAuthorizedPhoneByUserId: typeof getPrimaryAuthorizedPhoneByUserId;
   getRequest: typeof getRequest;
   getRequestNotificationContext: typeof getRequestNotificationContext;
+  getLatestWhatsappRequestByRequester: typeof getLatestWhatsappRequestByRequester;
   getUserContext: typeof getUserContext;
   getVehicleByPlate: typeof getVehicleByPlate;
   getWhatsappSessionByPhone: typeof getWhatsappSessionByPhone;
@@ -95,6 +97,7 @@ const defaultWhatsappFlowDependencies: WhatsappFlowDependencies = {
   getPrimaryAuthorizedPhoneByUserId,
   getRequest,
   getRequestNotificationContext,
+  getLatestWhatsappRequestByRequester,
   getUserContext,
   getVehicleByPlate,
   getWhatsappSessionByPhone,
@@ -144,7 +147,9 @@ function parsePlateAndAmount(text: string): {
   const amountSource = plateMatch?.[0]
     ? normalized.replace(plateMatch[0], " ").trim()
     : normalized;
-  const amountMatch = amountSource.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})|(?:R\$\s*)?\d+(?:\.\d{2})?/);
+  const amountMatch = amountSource.match(
+    /(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})|(?:R\$\s*)?\d{1,5}(?:,\d{2})?|(?:R\$\s*)?\d{1,5}(?:\.\d{2})?/,
+  );
 
   let amountCents: number | undefined;
   let invalidAmount = false;
@@ -489,12 +494,10 @@ export class WhatsappFlowService {
       ["CONCLUIDA", "REJEITADA", "CANCELADA", "EXPIRADA", "RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(
         currentRequest.status,
       );
-    if (terminalRequest) {
-      const clearedState =
-        isFinishConversation(normalizedText) || currentRequest.status === "CONCLUIDA" ? "CONCLUIDO" : "ERRO";
+    if (terminalRequest && (isStartNewRequest(normalizedText) || parsePlateAndAmount(normalizedText).plate || parsePlateAndAmount(normalizedText).amountCents)) {
       session = await this.deps.upsertWhatsappSession({
         phoneE164: input.phoneE164,
-        state: clearedState,
+        state: "AUTENTICADO",
         authenticatedUserId: session.authenticated_user_id,
         activeRequestId: null,
         pendingVehiclePlate: null,
@@ -871,6 +874,18 @@ export class WhatsappFlowService {
       return;
     }
 
+    if (isFinishConversation(text)) {
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Atendimento finalizado. Quando quiser iniciar novamente, envie seu CPF.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
     const pendingFromSession =
       session.pending_vehicle_plate && session.pending_amount_cents
         ? ({
@@ -908,6 +923,30 @@ export class WhatsappFlowService {
       return;
     }
 
+    if (isStatusIntent(text)) {
+      const guidance =
+        (session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO"
+          ? "Voce tem uma solicitacao pronta para confirmar. Confirme ou cancele para continuar."
+          : pendingFromSession?.plate
+            ? `Estamos montando sua solicitacao para a placa ${pendingFromSession.plate}. Envie o valor ou cancele para recomecar.`
+            : "Estamos montando uma nova solicitacao. Envie a placa do veiculo ou cancele para encerrar.";
+      await sendGuidedMessage({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: guidance,
+        options:
+          (session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO"
+            ? [
+                { id: "op_confirmar", title: "Confirmar" },
+                { id: "cancelar", title: "Cancelar" },
+              ]
+            : [{ id: "cancelar", title: "Cancelar" }],
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
     if (
       (session.state as WhatsappConversationState) === "AUTENTICADO" &&
       !pendingFromSession &&
@@ -922,6 +961,17 @@ export class WhatsappFlowService {
         toPhoneE164: input.phoneE164,
         body,
         options: defaultMenuOptions(),
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if ((session.state as WhatsappConversationState) === "AGUARDANDO_PLACA" && !parsed.plate) {
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Informe a placa do veiculo no formato ABC1234 ou ABC1D23.",
         replyToMessageId: input.providerMessageId,
       });
       return;
@@ -1138,7 +1188,38 @@ export class WhatsappFlowService {
     text: string,
     now: Date,
   ): Promise<void> {
-    const request = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
+    let request = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
+    if (!request && session.authenticated_user_id) {
+      const latestRequest = await this.deps.getLatestWhatsappRequestByRequester(session.authenticated_user_id);
+      if (latestRequest) {
+        request = latestRequest;
+        const sessionState: WhatsappConversationState =
+          latestRequest.status === "CONCLUIDA"
+            ? "CONCLUIDO"
+            : ["REJEITADA", "CANCELADA", "EXPIRADA", "RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(
+                  latestRequest.status,
+                )
+              ? "ERRO"
+              : latestRequest.status === "AGUARDANDO_APROVACAO" || latestRequest.status === "AGUARDANDO_SEGUNDA_APROVACAO"
+                ? "PENDENTE_APROVACAO"
+                : "PROCESSANDO";
+        await this.deps.upsertWhatsappSession({
+          phoneE164: input.phoneE164,
+          state: sessionState,
+          authenticatedUserId: session.authenticated_user_id,
+          activeRequestId: latestRequest.id,
+          pendingVehiclePlate: null,
+          pendingAmountCents: null,
+          failedCpfAttempts: 0,
+          failedMfaAttempts: 0,
+          authenticationAttempts: 0,
+          authenticatedAt: session.authenticated_at,
+          expiresAt: sessionExpiry(now),
+          lastMessageId: input.providerMessageId,
+          metadata: session.metadata,
+        });
+      }
+    }
     if (!request) {
       if (isFinishConversation(text)) {
         await resetSession(this.deps, input.phoneE164, input.providerMessageId);
@@ -1151,10 +1232,39 @@ export class WhatsappFlowService {
         });
         return;
       }
+      if (isStartNewRequest(text)) {
+        await this.deps.upsertWhatsappSession({
+          phoneE164: input.phoneE164,
+          state: "AGUARDANDO_PLACA",
+          authenticatedUserId: session.authenticated_user_id,
+          activeRequestId: null,
+          pendingVehiclePlate: null,
+          pendingAmountCents: null,
+          failedCpfAttempts: 0,
+          failedMfaAttempts: 0,
+          authenticationAttempts: 0,
+          authenticatedAt: session.authenticated_at,
+          expiresAt: sessionExpiry(now),
+          lastMessageId: input.providerMessageId,
+          metadata: {},
+        });
+        await sendText({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          body: "Informe a placa do veiculo.",
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
+
       await this.deps.upsertWhatsappSession({
         phoneE164: input.phoneE164,
         state: "AUTENTICADO",
         authenticatedUserId: session.authenticated_user_id,
+        activeRequestId: null,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
         failedCpfAttempts: 0,
         failedMfaAttempts: 0,
         authenticationAttempts: 0,
@@ -1163,7 +1273,8 @@ export class WhatsappFlowService {
         lastMessageId: input.providerMessageId,
         metadata: {},
       });
-      if (isStartNewRequest(text) || parsePlateAndAmount(text).plate || parsePlateAndAmount(text).amountCents) {
+
+      if (parsePlateAndAmount(text).plate || parsePlateAndAmount(text).amountCents) {
         await this.handleRequestStep(
           {
             ...session,

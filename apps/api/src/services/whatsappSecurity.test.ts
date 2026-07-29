@@ -35,6 +35,7 @@ test("expired session forces CPF reauthentication", async () => {
     getPrimaryAuthorizedPhoneByUserId: async () => null,
     getRequest: async () => null,
     getRequestNotificationContext: async () => null,
+    getLatestWhatsappRequestByRequester: async () => null,
     getUserContext: async () => null,
     getVehicleByPlate: async () => null,
     getWhatsappSessionByPhone: async () =>
