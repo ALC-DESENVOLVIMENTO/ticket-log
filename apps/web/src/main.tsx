@@ -637,6 +637,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
   const [lookupError, setLookupError] = useState("");
   const [secondApprovalStatus, setSecondApprovalStatus] = useState("");
   const [retryStatus, setRetryStatus] = useState("");
+  const [retrying, setRetrying] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
 
   useEffect(() => {
@@ -711,12 +712,20 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
 
   async function retryCurrentRequest() {
     setLookupError("");
+    setRetryStatus("");
+    setRetrying(true);
     try {
-      const result = await retryRequest(lookup.request.id);
-      setRetryStatus(JSON.stringify(result));
+      await retryRequest(lookup.request.id);
+      setRetryStatus(
+        lookup.request.status === "LIMITE_ALTERADO"
+          ? "Retomada da EVA enfileirada. O status sera atualizado automaticamente."
+          : "Solicitacao enfileirada. O status sera atualizado automaticamente.",
+      );
       setLookup(await getRequestDetails(lookup.request.id));
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : "REQUEST_RETRY_FAILED");
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -792,9 +801,15 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
               </button>
             )}
             {retryableStatuses.includes(request.status) && (
-              <button type="button" className="secondary" onClick={retryCurrentRequest}>
-                <RefreshCw size={18} />
-                {request.status === "NA_FILA" ? "Reenfileirar" : request.status === "LIMITE_ALTERADO" ? "Retomar EVA" : "Reprocessar"}
+              <button type="button" className="secondary" onClick={retryCurrentRequest} disabled={retrying}>
+                <RefreshCw size={18} className={retrying ? "spin" : undefined} />
+                {retrying
+                  ? "Enfileirando..."
+                  : request.status === "NA_FILA"
+                    ? "Reenfileirar"
+                    : request.status === "LIMITE_ALTERADO"
+                      ? "Retomar EVA"
+                      : "Reprocessar"}
               </button>
             )}
           </div>
@@ -805,7 +820,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
             </label>
           )}
           {secondApprovalStatus && <code>{secondApprovalStatus}</code>}
-          {retryStatus && <code>{retryStatus}</code>}
+          {retryStatus && <p className="status-message">{retryStatus}</p>}
 
           {steps.length > 0 && (
             <div className="timeline-block">

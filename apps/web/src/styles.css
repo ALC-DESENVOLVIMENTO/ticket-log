@@ -459,6 +459,24 @@ pre {
   gap: 10px;
 }
 
+.status-message {
+  background: #eef4ff;
+  border-left: 3px solid #184ea3;
+  color: #163d73;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .muted-line {
   color: var(--muted);
   display: block;
