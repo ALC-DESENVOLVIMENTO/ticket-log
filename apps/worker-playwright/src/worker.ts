@@ -1,7 +1,13 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
 import pino from "pino";
-import { getRedis, limitQueueName, type LimitJobData } from "@ticketlog/queue";
+import { listRecoverableAutomationRequestIds } from "@ticketlog/db";
+import {
+  enqueueLimitRequest,
+  getRedis,
+  limitQueueName,
+  type LimitJobData,
+} from "@ticketlog/queue";
 import { closeBrowserStation, hydrateStorageStateFromEnv, initializeBrowserStation } from "@ticketlog/ticketlog";
 import { processLimitRequest } from "./processLimitRequest.js";
 import {
@@ -44,6 +50,20 @@ await initializeBrowserStation()
     throw error;
   });
 const heartbeat = startOperationalHeartbeat();
+const configuredRecoveryIntervalMs = Number(process.env.AUTOMATION_RECOVERY_INTERVAL_MS ?? 30_000);
+const recoveryIntervalMs = Number.isFinite(configuredRecoveryIntervalMs)
+  ? Math.max(10_000, Math.floor(configuredRecoveryIntervalMs))
+  : 30_000;
+
+async function recoverPendingAutomationRequests(): Promise<void> {
+  const requestIds = await listRecoverableAutomationRequestIds({
+    staleAfterSeconds: Math.ceil(recoveryIntervalMs / 1_000),
+  });
+  for (const requestId of requestIds) {
+    await enqueueLimitRequest(requestId);
+    logger.info({ requestId }, "recoverable automation request ensured in queue");
+  }
+}
 
 const worker = new Worker<LimitJobData>(
   limitQueueName,
@@ -96,9 +116,31 @@ worker.on("failed", (job, error) => {
   );
 });
 
+await recoverPendingAutomationRequests().catch((error: unknown) => {
+  logger.error(
+    {
+      errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    },
+    "initial automation recovery scan failed",
+  );
+});
+const recoveryTimer = setInterval(() => {
+  void recoverPendingAutomationRequests().catch((error: unknown) => {
+    logger.error(
+      {
+        errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      "automation recovery scan failed",
+    );
+  });
+}, recoveryIntervalMs);
+
 process.on("SIGTERM", async () => {
   logger.info("shutting down worker");
   clearInterval(heartbeat);
+  clearInterval(recoveryTimer);
   await updateOperationalRuntime({ workerStatus: "STOPPING", statusMessage: "Worker encerrando" }).catch(() => undefined);
   await worker.close();
   await closeBrowserStation().catch(() => undefined);

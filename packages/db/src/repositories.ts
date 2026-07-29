@@ -792,6 +792,44 @@ export async function listRecentRequests(limit = 20): Promise<DbRequest[]> {
   return result.rows;
 }
 
+export async function listRecoverableAutomationRequestIds(input: {
+  staleAfterSeconds?: number;
+  limit?: number;
+} = {}): Promise<string[]> {
+  const staleAfterSeconds = Math.max(10, Math.min(input.staleAfterSeconds ?? 30, 3_600));
+  const boundedLimit = Math.max(1, Math.min(input.limit ?? 50, 200));
+  const result = await getPool().query<{ id: string }>(
+    `select r.id
+       from requests r
+      where r.updated_at <= now() - make_interval(secs => $1)
+        and (
+          r.status = 'FALHA_REPROCESSAVEL'
+          or r.status = 'NA_FILA'
+          or (
+            r.status = 'LIMITE_ALTERADO'
+            and exists (
+              select 1
+                from automation_steps change_step
+               where change_step.request_id = r.id
+                 and change_step.step_key = 'CHANGE_LIMIT'
+                 and change_step.status = 'DONE'
+            )
+            and not exists (
+              select 1
+                from automation_steps eva_step
+               where eva_step.request_id = r.id
+                 and eva_step.step_key = 'EVA_RELEASE'
+                 and eva_step.status = 'DONE'
+            )
+          )
+        )
+      order by r.updated_at
+      limit $2`,
+    [staleAfterSeconds, boundedLimit],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 export async function listAutomationSteps(requestId: string): Promise<DbAutomationStep[]> {
   const result = await getPool().query<DbAutomationStep>(
     `select step_key, status, error_code, started_at, finished_at

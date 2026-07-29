@@ -33,6 +33,7 @@ TICKETLOG_OPERATOR_PASSWORD=<segredo forte e exclusivo>
 WORKER_CONCURRENCY=1
 LIMIT_JOB_ATTEMPTS=3
 LIMIT_RETRY_DELAY_MS=15000
+AUTOMATION_RECOVERY_INTERVAL_MS=30000
 ```
 
 `TICKETLOG_OPERATOR_URL` e opcional. Quando ausente, o worker usa
@@ -59,6 +60,10 @@ backoff padrao e de 15 segundos e cresce exponencialmente. Quando o limite ja
 foi confirmado, as novas tentativas executam somente a etapa pendente da EVA.
 Depois da ultima tentativa, a solicitacao e encerrada em falha manual para nao
 bloquear uma nova solicitacao do usuario.
+
+O worker tambem varre periodicamente solicitacoes paradas em `NA_FILA`,
+`FALHA_REPROCESSAVEL` ou `LIMITE_ALTERADO` com a EVA pendente. Isso recupera
+jobs perdidos por reinicio, deploy ou encerramento inesperado do processo.
 
 ## Controles
 
