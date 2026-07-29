@@ -133,6 +133,20 @@ test("valid CPF asks for MFA", async () => {
   assert.match(sentMessages[0].body, /Google Authenticator/i);
 });
 
+test("first contact without greeting still asks for CPF", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () => null,
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-1",
+    phoneE164: "+5511999999999",
+    text: "preciso de limite",
+  });
+
+  assert.match(sentMessages[0].body, /envie seu CPF/i);
+});
+
 test("valid MFA authenticates and requests plate and amount", async () => {
   const { service, sentMessages } = createService({
     getWhatsappSessionByPhone: async () =>
@@ -180,7 +194,7 @@ test("plate and amount in same message request confirmation", async () => {
     text: "PWH4E85 10,00",
   });
 
-  assert.match(sentMessages[0].body, /CONFIRMAR/i);
+  assert.match(sentMessages[0].body, /Confirme os dados da solicitacao/i);
   assert.match(sentMessages[0].body, /PWH4E85/);
   assert.match(sentMessages[0].body, /10,00|10\.00|R\$\s*10,00/i);
 });
@@ -264,4 +278,47 @@ test("cancel command resets current flow", async () => {
   });
 
   assert.match(sentMessages[0].body, /Solicitacao cancelada/i);
+});
+
+test("failed previous request does not block a new request", async () => {
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "PROCESSANDO",
+        authenticated_user_id: "user-1",
+        active_request_id: "req-old",
+        authenticated_at: new Date(),
+      }),
+    getRequest: async (id: string) =>
+      id === "req-old"
+        ? ({
+            id: "req-old",
+            requester_id: "user-1",
+            vehicle_plate: "OLD1A23",
+            vehicle_group: "UTILITARIOS",
+            requested_amount: "10.00",
+            channel: "whatsapp",
+            status: "RESULTADO_INDETERMINADO",
+            expires_at: new Date(),
+          } as any)
+        : null,
+    upsertWhatsappSession: async (input: any) =>
+      buildSession({
+        state: input.state ?? "AUTENTICADO",
+        authenticated_user_id: input.authenticatedUserId ?? "user-1",
+        active_request_id: input.activeRequestId ?? null,
+        pending_vehicle_plate: input.pendingVehiclePlate ?? null,
+        pending_amount_cents: input.pendingAmountCents ?? null,
+        authenticated_at: new Date(),
+      }),
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-entry-2",
+    phoneE164: "+5511999999999",
+    text: "PWH4E85 10,00",
+  });
+
+  assert.match(sentMessages[0].body, /Confirme os dados da solicitacao/i);
+  assert.match(sentMessages[0].body, /PWH4E85/);
 });

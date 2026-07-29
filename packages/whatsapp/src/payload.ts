@@ -12,7 +12,13 @@ export function extractMetaMessages(payload: any): InboundWhatsappMessage[] {
     for (const change of entry.changes ?? []) {
       const value = change.value;
       for (const message of value?.messages ?? []) {
-        const text = message?.text?.body;
+        const text =
+          message?.text?.body ??
+          message?.interactive?.button_reply?.id ??
+          message?.interactive?.button_reply?.title ??
+          message?.button?.text ??
+          message?.interactive?.list_reply?.id ??
+          message?.interactive?.list_reply?.title;
         const phone = message?.from;
         if (message.id && phone && text) {
           messages.push({

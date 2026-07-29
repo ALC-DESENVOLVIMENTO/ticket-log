@@ -34,7 +34,7 @@ import {
   type DbUserContext,
   rejectRequest,
 } from "@ticketlog/db";
-import type { WhatsappProvider } from "@ticketlog/whatsapp";
+import type { WhatsappOption, WhatsappProvider } from "@ticketlog/whatsapp";
 import { enqueueLimitRequest } from "@ticketlog/queue";
 import { config } from "../config.js";
 import { verifyTotpCode } from "../mfa.js";
@@ -172,7 +172,34 @@ function isExit(text: string): boolean {
 }
 
 function isConfirm(text: string): boolean {
-  return ["confirmar", "confirmo", "ok", "sim"].includes(lowerMessage(text));
+  return ["confirmar", "confirmo", "ok", "sim", "op_confirmar"].includes(lowerMessage(text));
+}
+
+function isStartNewRequest(text: string): boolean {
+  return [
+    "nova",
+    "novo",
+    "nova solicitacao",
+    "nova solicitação",
+    "iniciar",
+    "op_nova_solicitacao",
+  ].includes(lowerMessage(text));
+}
+
+function isFinishConversation(text: string): boolean {
+  return ["finalizar", "encerrar", "op_finalizar"].includes(lowerMessage(text));
+}
+
+function isStatusIntent(text: string): boolean {
+  return ["status", "acompanhar", "protocolo", "op_ver_status"].includes(lowerMessage(text));
+}
+
+function defaultMenuOptions(): WhatsappOption[] {
+  return [
+    { id: "op_nova_solicitacao", title: "Nova solicitacao" },
+    { id: "op_ver_status", title: "Ver status" },
+    { id: "op_finalizar", title: "Finalizar" },
+  ];
 }
 
 function buildSuccessMessage(input: {
@@ -217,6 +244,45 @@ async function sendText(input: {
     direction: "out",
     requestId: input.requestId,
     body: input.body,
+  });
+}
+
+async function sendGuidedMessage(input: {
+  provider: WhatsappProvider;
+  recordWhatsappMessageFn: typeof recordWhatsappMessage;
+  toPhoneE164: string;
+  body: string;
+  options?: WhatsappOption[];
+  requestId?: string;
+  replyToMessageId?: string;
+}): Promise<void> {
+  if (input.options?.length && input.provider.sendOptionsMessage) {
+    const sent = await input.provider.sendOptionsMessage({
+      toPhoneE164: input.toPhoneE164,
+      body: input.body,
+      replyToMessageId: input.replyToMessageId,
+      options: input.options,
+    });
+    await input.recordWhatsappMessageFn({
+      providerMessageId: sent.providerMessageId ?? undefined,
+      phoneE164: input.toPhoneE164,
+      direction: "out",
+      requestId: input.requestId,
+      body: `${input.body}\nOpcoes: ${input.options.map((option) => option.title).join(" | ")}`,
+    });
+    return;
+  }
+
+  const fallbackBody = input.options?.length
+    ? `${input.body}\nOpcoes:\n${input.options.map((option, index) => `${index + 1}. ${option.title}`).join("\n")}`
+    : input.body;
+  await sendText({
+    provider: input.provider,
+    recordWhatsappMessageFn: input.recordWhatsappMessageFn,
+    toPhoneE164: input.toPhoneE164,
+    body: fallbackBody,
+    requestId: input.requestId,
+    replyToMessageId: input.replyToMessageId,
   });
 }
 
@@ -273,9 +339,26 @@ async function resetSession(
   await deps.upsertWhatsappSession({
     phoneE164,
     state: "AGUARDANDO_CPF",
+    activeRequestId: null,
+    authenticatedUserId: null,
+    pendingVehiclePlate: null,
+    pendingAmountCents: null,
     expiresAt: sessionExpiry(new Date()),
     lastMessageId,
   });
+}
+
+function buildNextActionBody(status: string): string {
+  if (status === "CONCLUIDA") {
+    return "Se quiser, podemos abrir uma nova solicitacao agora ou encerrar o atendimento.";
+  }
+  if (["RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(status)) {
+    return "A solicitacao anterior nao foi concluida com seguranca. Voce pode consultar o status, iniciar uma nova solicitacao ou encerrar.";
+  }
+  if (["REJEITADA", "CANCELADA", "EXPIRADA"].includes(status)) {
+    return "Essa solicitacao foi encerrada. Posso iniciar uma nova solicitacao ou encerrar o atendimento.";
+  }
+  return "Posso consultar o status atual, iniciar uma nova solicitacao ou encerrar o atendimento.";
 }
 
 async function resolvePendingInput(
@@ -359,14 +442,19 @@ export class WhatsappFlowService {
         expiresAt: sessionExpiry(now),
         lastMessageId: input.providerMessageId,
       });
-      await sendText({
+      if (isValidCpf(normalizeCpf(normalizedText))) {
+        await this.handleCpfStep(session, input, normalizedText, now);
+        return;
+      }
+      await sendGuidedMessage({
         provider: this.provider,
         recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
         toPhoneE164: input.phoneE164,
         body: [
           `Bem-vindo ao atendimento de abastecimento da ${config.companyName}.`,
-          "Para solicitar alteracao de limite, envie seu CPF.",
+          "Para comecar, envie seu CPF cadastrado.",
         ].join("\n"),
+        options: defaultMenuOptions(),
         replyToMessageId: input.providerMessageId,
       });
       return;
@@ -381,6 +469,31 @@ export class WhatsappFlowService {
         replyToMessageId: input.providerMessageId,
       });
       return;
+    }
+
+    const currentRequest = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
+    const terminalRequest =
+      currentRequest &&
+      ["CONCLUIDA", "REJEITADA", "CANCELADA", "EXPIRADA", "RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(
+        currentRequest.status,
+      );
+    if (terminalRequest) {
+      const clearedState = isFinishConversation(normalizedText) ? "CONCLUIDO" : "AUTENTICADO";
+      session = await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: clearedState,
+        authenticatedUserId: session.authenticated_user_id,
+        activeRequestId: null,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
     }
 
     if (new Date(session.expires_at).getTime() <= now.getTime()) {
@@ -464,7 +577,7 @@ export class WhatsappFlowService {
       case "CONCLUIDO":
       case "ERRO":
       default:
-        await this.handleStatusStep(session, input, now);
+        await this.handleStatusStep(session, input, normalizedText, now);
         return;
     }
   }
@@ -477,6 +590,17 @@ export class WhatsappFlowService {
   ): Promise<void> {
     const cpf = normalizeCpf(text);
     if (!isValidCpf(cpf)) {
+      if (isStartNewRequest(text) || isStatusIntent(text) || isFinishConversation(text)) {
+        await sendGuidedMessage({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          body: "Para comecar o atendimento com seguranca, envie seu CPF cadastrado.",
+          options: defaultMenuOptions(),
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
       const attempts = session.failed_cpf_attempts + 1;
       const lockedUntil = attempts >= config.whatsappMaxAuthAttempts
         ? new Date(now.getTime() + config.whatsappTemporaryBlockMinutes * 60_000)
@@ -526,7 +650,7 @@ export class WhatsappFlowService {
         provider: this.provider,
         recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
         toPhoneE164: input.phoneE164,
-        body: "CPF nao autorizado para este atendimento.",
+        body: "CPF nao autorizado para este atendimento. Se precisar, fale com o administrador para liberar seu acesso.",
         replyToMessageId: input.providerMessageId,
       });
       return;
@@ -750,11 +874,15 @@ export class WhatsappFlowService {
           : null;
 
     if ((session.state as WhatsappConversationState) === "AGUARDANDO_CONFIRMACAO" && !isConfirm(text)) {
-      await sendText({
+      await sendGuidedMessage({
         provider: this.provider,
         recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
         toPhoneE164: input.phoneE164,
-        body: "Responda CONFIRMAR para continuar ou CANCELAR para encerrar a solicitacao.",
+        body: "Revise os dados acima. Se estiver tudo certo, confirme a solicitacao ou cancele.",
+        options: [
+          { id: "op_confirmar", title: "Confirmar" },
+          { id: "cancelar", title: "Cancelar" },
+        ],
         replyToMessageId: input.providerMessageId,
       });
       return;
@@ -853,6 +981,7 @@ export class WhatsappFlowService {
             `Placa: ${pendingFromSession.plate}`,
             `Valor solicitado: ${formatCurrency(amount)}`,
             `Protocolo: ${request.id}`,
+            "Vou avisar por aqui assim que houver aprovacao ou rejeicao.",
           ].join("\n"),
           replyToMessageId: input.providerMessageId,
         });
@@ -885,6 +1014,7 @@ export class WhatsappFlowService {
           `Placa: ${pendingFromSession.plate}`,
           `Valor solicitado: ${formatCurrency(amount)}`,
           `Protocolo: ${request.id}`,
+          "Assim que a Ticket Log responder, eu aviso por aqui.",
         ].join("\n"),
         replyToMessageId: input.providerMessageId,
       });
@@ -945,7 +1075,7 @@ export class WhatsappFlowService {
       lastMessageId: input.providerMessageId,
       metadata: { vehicleGroup: resolved.pending.vehicleGroup },
     });
-    await sendText({
+    await sendGuidedMessage({
       provider: this.provider,
       recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
       toPhoneE164: input.phoneE164,
@@ -954,19 +1084,34 @@ export class WhatsappFlowService {
         `Placa: ${resolved.pending.plate}`,
         `Novo limite solicitado: ${formatCurrency(centsToAmount(resolved.pending.amountCents))}`,
         `Grupo: ${resolved.pending.vehicleGroup}`,
-        "Responda CONFIRMAR para continuar ou CANCELAR para encerrar.",
       ].join("\n"),
+      options: [
+        { id: "op_confirmar", title: "Confirmar" },
+        { id: "cancelar", title: "Cancelar" },
+      ],
       replyToMessageId: input.providerMessageId,
     });
   }
 
   private async handleStatusStep(
     session: Awaited<ReturnType<typeof getWhatsappSessionByPhone>> extends infer T ? Exclude<T, null> : never,
-    input: { providerMessageId: string; phoneE164: string },
+    input: { providerMessageId: string; phoneE164: string; text: string },
+    text: string,
     now: Date,
   ): Promise<void> {
     const request = session.active_request_id ? await this.deps.getRequest(session.active_request_id) : null;
     if (!request) {
+      if (isFinishConversation(text)) {
+        await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+        await sendText({
+          provider: this.provider,
+          recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+          toPhoneE164: input.phoneE164,
+          body: "Atendimento finalizado. Quando quiser de novo, basta enviar qualquer mensagem e depois seu CPF.",
+          replyToMessageId: input.providerMessageId,
+        });
+        return;
+      }
       await this.deps.upsertWhatsappSession({
         phoneE164: input.phoneE164,
         state: "AUTENTICADO",
@@ -979,27 +1124,82 @@ export class WhatsappFlowService {
         lastMessageId: input.providerMessageId,
         metadata: {},
       });
-      await sendText({
+      if (isStartNewRequest(text) || parsePlateAndAmount(text).plate || parsePlateAndAmount(text).amountCents) {
+        await this.handleRequestStep(
+          {
+            ...session,
+            state: "AUTENTICADO",
+            active_request_id: null,
+            pending_vehicle_plate: null,
+            pending_amount_cents: null,
+          },
+          input,
+          text,
+          now,
+        );
+        return;
+      }
+      await sendGuidedMessage({
         provider: this.provider,
         recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
         toPhoneE164: input.phoneE164,
-        body: "Envie a placa e o valor do novo limite para iniciar outra solicitacao.",
+        body: "Nao ha solicitacao ativa no momento. Posso abrir uma nova solicitacao para voce agora.",
+        options: defaultMenuOptions(),
         replyToMessageId: input.providerMessageId,
       });
       return;
     }
 
-    await sendText({
+    const isResolvedStatus = ["CONCLUIDA", "REJEITADA", "CANCELADA", "EXPIRADA"].includes(request.status);
+    const isFailedStatus = ["RESULTADO_INDETERMINADO", "FALHA_MANUAL", "FALHA_REPROCESSAVEL"].includes(request.status);
+
+    if (isFinishConversation(text)) {
+      await resetSession(this.deps, input.phoneE164, input.providerMessageId);
+      await sendText({
+        provider: this.provider,
+        recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
+        toPhoneE164: input.phoneE164,
+        body: "Atendimento finalizado. Quando quiser iniciar novamente, envie qualquer mensagem e depois seu CPF.",
+        replyToMessageId: input.providerMessageId,
+      });
+      return;
+    }
+
+    if ((isResolvedStatus || isFailedStatus) && (isStartNewRequest(text) || parsePlateAndAmount(text).plate || parsePlateAndAmount(text).amountCents)) {
+      const reset = await this.deps.upsertWhatsappSession({
+        phoneE164: input.phoneE164,
+        state: "AUTENTICADO",
+        authenticatedUserId: session.authenticated_user_id,
+        activeRequestId: null,
+        pendingVehiclePlate: null,
+        pendingAmountCents: null,
+        failedCpfAttempts: 0,
+        failedMfaAttempts: 0,
+        authenticationAttempts: 0,
+        authenticatedAt: session.authenticated_at,
+        expiresAt: sessionExpiry(now),
+        lastMessageId: input.providerMessageId,
+        metadata: {},
+      });
+      await this.handleRequestStep(reset, input, text, now);
+      return;
+    }
+
+    const statusBody = [
+      `Protocolo: ${request.id}`,
+      `Status atual: ${request.status}`,
+      `Placa: ${request.vehicle_plate}`,
+      `Valor solicitado: ${formatCurrency(request.requested_amount)}`,
+      buildNextActionBody(request.status),
+    ].join("\n");
+
+    await sendGuidedMessage({
       provider: this.provider,
       recordWhatsappMessageFn: this.deps.recordWhatsappMessage,
       toPhoneE164: input.phoneE164,
       requestId: request.id,
-      body: [
-        `Protocolo: ${request.id}`,
-        `Status atual: ${request.status}`,
-        `Placa: ${request.vehicle_plate}`,
-        `Valor solicitado: ${formatCurrency(request.requested_amount)}`,
-      ].join("\n"),
+      body: statusBody,
+      options: defaultMenuOptions(),
       replyToMessageId: input.providerMessageId,
     });
   }
@@ -1030,14 +1230,20 @@ export async function notifyWhatsappRequestResolved(input: {
           executedAt: new Date(),
           protocol: context.request.id,
         })
-      : "Nao foi possivel concluir a alteracao neste momento. Entre em contato novamente daqui a 30 minutos.";
+      : [
+          "Nao foi possivel concluir a alteracao neste momento.",
+          "Entre em contato novamente daqui a 30 minutos.",
+          `Protocolo: ${context.request.id}`,
+          `Placa: ${context.request.vehicle_plate}`,
+        ].join("\n");
 
-  await sendText({
+  await sendGuidedMessage({
     provider: input.provider,
     recordWhatsappMessageFn: recordWhatsappMessage,
     toPhoneE164: context.requesterPhoneE164,
     requestId: context.request.id,
-    body: message,
+    body: `${message}\n${buildNextActionBody(status)}`,
+    options: defaultMenuOptions(),
   });
   await markRequestNotification({
     requestId: context.request.id,
@@ -1045,6 +1251,20 @@ export async function notifyWhatsappRequestResolved(input: {
     channel: "whatsapp",
     recipientPhoneE164: context.requesterPhoneE164,
     status: "sent",
+  });
+  await upsertWhatsappSession({
+    phoneE164: context.requesterPhoneE164,
+    state: status === "CONCLUIDA" ? "CONCLUIDO" : "ERRO",
+    authenticatedUserId: context.request.requester_id,
+    activeRequestId: context.request.id,
+    pendingVehiclePlate: null,
+    pendingAmountCents: null,
+    failedCpfAttempts: 0,
+    failedMfaAttempts: 0,
+    authenticationAttempts: 0,
+    authenticatedAt: new Date(),
+    expiresAt: sessionExpiry(new Date()),
+    metadata: {},
   });
 }
 

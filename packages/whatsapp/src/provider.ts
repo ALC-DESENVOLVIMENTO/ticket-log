@@ -4,12 +4,22 @@ export interface OutboundWhatsappMessage {
   replyToMessageId?: string;
 }
 
+export interface WhatsappOption {
+  id: string;
+  title: string;
+}
+
 export interface SentWhatsappMessage {
   providerMessageId: string | null;
 }
 
 export interface WhatsappProvider {
   sendTextMessage(message: OutboundWhatsappMessage): Promise<SentWhatsappMessage>;
+  sendOptionsMessage?(
+    message: OutboundWhatsappMessage & {
+      options: WhatsappOption[];
+    },
+  ): Promise<SentWhatsappMessage>;
 }
 
 export class NoopWhatsappProvider implements WhatsappProvider {
@@ -28,6 +38,53 @@ export class MetaWhatsappCloudProvider implements WhatsappProvider {
   ) {}
 
   async sendTextMessage(message: OutboundWhatsappMessage): Promise<SentWhatsappMessage> {
+    return this.sendPayload({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: message.toPhoneE164.replace(/^\+/, ""),
+      type: "text",
+      context: message.replyToMessageId ? { message_id: message.replyToMessageId } : undefined,
+      text: {
+        preview_url: false,
+        body: message.body,
+      },
+    });
+  }
+
+  async sendOptionsMessage(
+    message: OutboundWhatsappMessage & {
+      options: WhatsappOption[];
+    },
+  ): Promise<SentWhatsappMessage> {
+    if (!message.options.length || message.options.length > 3) {
+      return this.sendTextMessage(message);
+    }
+
+    return this.sendPayload({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: message.toPhoneE164.replace(/^\+/, ""),
+      type: "interactive",
+      context: message.replyToMessageId ? { message_id: message.replyToMessageId } : undefined,
+      interactive: {
+        type: "button",
+        body: {
+          text: message.body,
+        },
+        action: {
+          buttons: message.options.map((option) => ({
+            type: "reply",
+            reply: {
+              id: option.id,
+              title: option.title,
+            },
+          })),
+        },
+      },
+    });
+  }
+
+  private async sendPayload(requestPayload: unknown): Promise<SentWhatsappMessage> {
     const response = await fetch(
       `${this.input.apiBaseUrl.replace(/\/$/, "")}/${this.input.phoneNumberId}/messages`,
       {
@@ -36,17 +93,7 @@ export class MetaWhatsappCloudProvider implements WhatsappProvider {
           authorization: `Bearer ${this.input.accessToken}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: message.toPhoneE164.replace(/^\+/, ""),
-          type: "text",
-          context: message.replyToMessageId ? { message_id: message.replyToMessageId } : undefined,
-          text: {
-            preview_url: false,
-            body: message.body,
-          },
-        }),
+        body: JSON.stringify(requestPayload),
       },
     );
 
@@ -55,11 +102,11 @@ export class MetaWhatsappCloudProvider implements WhatsappProvider {
       throw new Error(`WHATSAPP_SEND_FAILED:${response.status}:${text.slice(0, 200)}`);
     }
 
-    const payload = (await response.json()) as {
+    const responsePayload = (await response.json()) as {
       messages?: Array<{ id?: string }>;
     };
     return {
-      providerMessageId: payload.messages?.[0]?.id ?? null,
+      providerMessageId: responsePayload.messages?.[0]?.id ?? null,
     };
   }
 }
