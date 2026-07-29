@@ -735,7 +735,13 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
   const request = lookup?.request ?? lookup;
   const steps = lookup?.steps ?? [];
   const events = lookup?.events ?? [];
-  const retryableStatuses = ["NA_FILA", "FALHA_REPROCESSAVEL", "FALHA_MANUAL", "LIMITE_ALTERADO"];
+  const retryableStatuses = [
+    "NA_FILA",
+    "FALHA_REPROCESSAVEL",
+    "FALHA_MANUAL",
+    "RESULTADO_INDETERMINADO",
+    "LIMITE_ALTERADO",
+  ];
   const visualStatus = displayRequestStatus(request, steps);
 
   return (
