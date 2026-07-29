@@ -48,9 +48,14 @@ const heartbeat = startOperationalHeartbeat();
 const worker = new Worker<LimitJobData>(
   limitQueueName,
   async (job) => {
-    logger.info({ jobId: job.id, requestId: job.data.requestId }, "processing limit request");
+    const attemptNumber = job.attemptsMade + 1;
+    const maxAttempts = Number(job.opts.attempts ?? 1);
+    logger.info(
+      { jobId: job.id, requestId: job.data.requestId, attemptNumber, maxAttempts },
+      "processing limit request",
+    );
     try {
-      await processLimitRequest(job.data.requestId);
+      await processLimitRequest(job.data.requestId, { attemptNumber, maxAttempts });
     } catch (error) {
       logger.error(
         {

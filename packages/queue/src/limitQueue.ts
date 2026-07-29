@@ -8,11 +8,17 @@ export interface LimitJobData {
 export const limitQueueName = "ticketlog-limit-requests";
 
 export function getLimitQueue(): Queue<LimitJobData> {
+  const configuredAttempts = Number(process.env.LIMIT_JOB_ATTEMPTS ?? 3);
+  const configuredRetryDelayMs = Number(process.env.LIMIT_RETRY_DELAY_MS ?? 15_000);
+  const attempts = Number.isFinite(configuredAttempts) ? Math.max(1, Math.floor(configuredAttempts)) : 3;
+  const retryDelayMs = Number.isFinite(configuredRetryDelayMs)
+    ? Math.max(1_000, Math.floor(configuredRetryDelayMs))
+    : 15_000;
   return new Queue<LimitJobData>(limitQueueName, {
     connection: getRedis(),
     defaultJobOptions: {
-      attempts: 3,
-      backoff: { type: "exponential", delay: 30_000 },
+      attempts,
+      backoff: { type: "exponential", delay: retryDelayMs },
       removeOnComplete: 500,
       removeOnFail: false,
     },

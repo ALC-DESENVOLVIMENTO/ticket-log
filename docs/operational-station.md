@@ -31,6 +31,8 @@ TICKETLOG_SESSION_STORAGE_PATH=/data/ticketlog-session/storage-state.json
 TICKETLOG_OPERATOR_ACCESS_TOKEN=<segredo base64url ou hex com 32+ caracteres>
 TICKETLOG_OPERATOR_PASSWORD=<segredo forte e exclusivo>
 WORKER_CONCURRENCY=1
+LIMIT_JOB_ATTEMPTS=3
+LIMIT_RETRY_DELAY_MS=15000
 ```
 
 `TICKETLOG_OPERATOR_URL` e opcional. Quando ausente, o worker usa
@@ -51,6 +53,12 @@ servicos `api` e `worker-playwright`. O token nao e persistido no banco.
 8. Se a solicitacao ja estiver em `FALHA_MANUAL`, o operador usa
    `Retomar solicitacao`.
 9. O operador encerra o acesso ao terminar.
+
+Falhas transitorias de interface sao retomadas automaticamente pela fila. O
+backoff padrao e de 15 segundos e cresce exponencialmente. Quando o limite ja
+foi confirmado, as novas tentativas executam somente a etapa pendente da EVA.
+Depois da ultima tentativa, a solicitacao e encerrada em falha manual para nao
+bloquear uma nova solicitacao do usuario.
 
 ## Controles
 

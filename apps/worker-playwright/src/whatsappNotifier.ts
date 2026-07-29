@@ -116,3 +116,43 @@ export async function notifyWhatsappResolvedRequest(requestId: string): Promise<
     });
   }
 }
+
+export async function notifyWhatsappRetryScheduled(
+  requestId: string,
+  stepKey: "CHANGE_LIMIT" | "EVA_RELEASE",
+): Promise<void> {
+  const context = await getRequestNotificationContext(requestId);
+  if (!context || context.request.channel !== "whatsapp" || !context.requesterPhoneE164) {
+    return;
+  }
+
+  const eventKey = `REQUEST_RETRYING:${stepKey}`;
+  const existing = await findRequestNotification({
+    requestId,
+    eventKey,
+    channel: "whatsapp",
+  });
+  if (existing?.status === "sent") return;
+
+  const body =
+    stepKey === "EVA_RELEASE"
+      ? [
+          "O limite ja foi alterado. A liberacao complementar encontrou uma instabilidade e sera tentada novamente automaticamente.",
+          "Nao e necessario abrir outro chamado agora.",
+          `Protocolo: ${formatRequestProtocol(context.request.id)}`,
+        ].join("\n")
+      : [
+          "A Ticket Log apresentou uma instabilidade temporaria.",
+          "A solicitacao sera tentada novamente automaticamente.",
+          `Protocolo: ${formatRequestProtocol(context.request.id)}`,
+        ].join("\n");
+
+  await sendText(context.requesterPhoneE164, body, context.request.id);
+  await markRequestNotification({
+    requestId: context.request.id,
+    eventKey,
+    channel: "whatsapp",
+    recipientPhoneE164: context.requesterPhoneE164,
+    status: "sent",
+  });
+}

@@ -165,3 +165,31 @@ test("closes an open EVA chat panel after release", async () => {
     await browser.close();
   }
 });
+
+test("starts another release from a completed EVA conversation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section id="eva-panel">
+        <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+        <p>Pronto! Fiz a liberacao da restricao.</p>
+        <button
+          id="new-release"
+          onclick="document.querySelector('#plate-form').hidden = false"
+        >Incluir nova liberacao de restricao</button>
+        <section id="plate-form" hidden>
+          <textarea aria-label="Placa"></textarea>
+          <button>Enviar</button>
+        </section>
+      </section>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(await page.getByRole("textbox").inputValue(), "PWH4E85");
+  } finally {
+    await browser.close();
+  }
+});

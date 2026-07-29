@@ -21,16 +21,26 @@ import {
   updateOperationalRuntime,
 } from "./operationalRuntime.js";
 import { needsLimitChangedTransition } from "./resumeState.js";
-import { notifyWhatsappResolvedRequest } from "./whatsappNotifier.js";
-
-type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
+import {
+  notifyWhatsappResolvedRequest,
+  notifyWhatsappRetryScheduled,
+} from "./whatsappNotifier.js";
+import {
+  decideAutomationRetry,
+  isAuthenticationIntervention,
+  type AutomationStepKey,
+} from "./retryPolicy.js";
 
 interface ProcessLimitRequestOptions {
   allowManualStart?: boolean;
+  attemptNumber?: number;
+  maxAttempts?: number;
 }
 
 export async function processLimitRequest(requestId: string, options: ProcessLimitRequestOptions = {}): Promise<void> {
-  console.info({ requestId }, "processLimitRequest:start");
+  const attemptNumber = Math.max(1, options.attemptNumber ?? 1);
+  const maxAttempts = Math.max(attemptNumber, options.maxAttempts ?? 1);
+  console.info({ requestId, attemptNumber, maxAttempts }, "processLimitRequest:start");
   const request = await getRequest(requestId);
   if (!request) throw new Error("REQUEST_NOT_FOUND");
 
@@ -218,18 +228,32 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       "processLimitRequest:error",
     );
     const changeLimitCompleted = await hasCompletedStep(requestId, "CHANGE_LIMIT").catch(() => false);
-    const shouldRetry = await classifyFailure(requestId, error, currentStep, changeLimitCompleted);
+    const shouldRetry = await classifyFailure({
+      requestId,
+      error,
+      stepKey: currentStep,
+      changeLimitCompleted,
+      attemptNumber,
+      maxAttempts,
+    });
+    if (shouldRetry) {
+      await notifyWhatsappRetryScheduled(requestId, currentStep).catch(() => undefined);
+    }
     if (!shouldRetry) {
       await notifyWhatsappResolvedRequest(requestId).catch(() => undefined);
     }
     const authenticationRequired = isAuthenticationIntervention(error);
     await updateOperationalRuntime({
-      workerStatus: error instanceof ManualInterventionError ? "WAITING_OPERATOR" : "IDLE",
+      workerStatus: authenticationRequired ? "WAITING_OPERATOR" : shouldRetry ? "RETRYING" : "IDLE",
       sessionStatus: authenticationRequired ? "AUTH_REQUIRED" : "ERROR",
       currentRequestId: requestId,
       currentStep,
-      challengeType: error instanceof ManualInterventionError ? error.code : null,
-      statusMessage: error instanceof Error ? error.message : String(error),
+      challengeType: authenticationRequired && error instanceof ManualInterventionError ? error.code : null,
+      statusMessage: shouldRetry
+        ? `Falha temporaria; nova tentativa automatica ${attemptNumber + 1}/${maxAttempts}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
     });
     if (shouldRetry) throw error;
   } finally {
@@ -237,57 +261,44 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
   }
 }
 
-function isAuthenticationIntervention(error: unknown): boolean {
-  if (!(error instanceof ManualInterventionError)) return false;
-
-  return [
-    "BROWSER_CLOSED_DURING_MANUAL_LOGIN",
-    "MANUAL_LOGIN_NOT_CONFIRMED",
-    "TICKETLOG_CREDENTIALS_REQUIRED_FOR_LOGIN",
-    "TICKETLOG_SESSION_NOT_AUTHENTICATED",
-    "UNEXPECTED_CAPTCHA_OR_MFA",
-  ].includes(error.code);
-}
-
-async function classifyFailure(
+async function classifyFailure(input: {
   requestId: string,
   error: unknown,
   stepKey: AutomationStepKey,
   changeLimitCompleted: boolean,
-): Promise<boolean> {
-  const keepLimitChangedState = stepKey === "EVA_RELEASE" && changeLimitCompleted;
+  attemptNumber: number,
+  maxAttempts: number,
+}): Promise<boolean> {
+  const decision = decideAutomationRetry(input);
+  const keepLimitChangedState = input.stepKey === "EVA_RELEASE" && input.changeLimitCompleted;
 
-  if (error instanceof ManualInterventionError) {
-    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
-    if (!keepLimitChangedState) {
-      await transitionRequest(requestId, "FALHA_MANUAL").catch(() => undefined);
-    }
-    return false;
-  }
+  await upsertAutomationStep({
+    requestId: input.requestId,
+    stepKey: input.stepKey,
+    status: "FAILED",
+    errorCode: decision.errorCode,
+  });
+  await appendAuditEvent({
+    requestId: input.requestId,
+    eventType: decision.retry ? "AUTOMATION_RETRY_SCHEDULED" : "AUTOMATION_RETRY_EXHAUSTED",
+    payload: {
+      stepKey: input.stepKey,
+      errorCode: decision.errorCode,
+      attemptNumber: input.attemptNumber,
+      maxAttempts: input.maxAttempts,
+      changeLimitCompleted: input.changeLimitCompleted,
+    },
+  });
 
-  if (error instanceof IndeterminateResultError) {
-    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.message });
+  if (decision.retry) {
     if (!keepLimitChangedState) {
-      await transitionRequest(requestId, "RESULTADO_INDETERMINADO").catch(() => undefined);
-    }
-    return false;
-  }
-
-  if (error instanceof ReprocessableAutomationError) {
-    await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: error.code });
-    if (!keepLimitChangedState) {
-      await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+      await transitionRequest(input.requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
     }
     return true;
   }
 
-  const unexpectedErrorCode =
-    error instanceof Error && error.message
-      ? `UNEXPECTED_ERROR:${error.message.slice(0, 180)}`
-      : "UNEXPECTED_ERROR";
-  await upsertAutomationStep({ requestId, stepKey, status: "FAILED", errorCode: unexpectedErrorCode });
-  if (!keepLimitChangedState) {
-    await transitionRequest(requestId, "FALHA_REPROCESSAVEL").catch(() => undefined);
+  if (decision.finalState) {
+    await transitionRequest(input.requestId, decision.finalState).catch(() => undefined);
   }
-  return true;
+  return false;
 }

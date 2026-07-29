@@ -66,7 +66,24 @@ export class EvaPage {
   }
 
   async closePanelIfOpen(timeoutMs = 1_500): Promise<boolean> {
-    if (!(await this.getEvaSurface(timeoutMs))) return false;
+    const initialSurface = await this.getEvaSurface(timeoutMs);
+    if (!initialSurface) return false;
+
+    const finishConversation = await this.findVisibleOrNull(
+      [
+        initialSurface.getByRole("button", { name: /sair e avaliar|exit and rate/i }).first(),
+        initialSurface.getByText(/sair e avaliar|exit and rate/i).first(),
+      ],
+      500,
+    );
+    if (finishConversation) {
+      await finishConversation.click({ force: true }).catch(() => undefined);
+      await this.page.waitForTimeout(400);
+      if (!(await this.getEvaSurface(500))) {
+        console.info("ticketlog.eva:conversation-finished-and-panel-closed");
+        return true;
+      }
+    }
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const closed = await this.closeOneEvaPanel();
@@ -102,7 +119,49 @@ export class EvaPage {
 
   private async openReleaseFuelRestrictionFlow(): Promise<Frame> {
     await this.open();
-    const frame = await this.requireEvaSurface();
+    let frame = await this.requireEvaSurface();
+
+    const startAnotherRelease = await this.findVisibleOrNull(
+      [
+        frame.getByRole("button", { name: /incluir nova libera..o de restri..o|new restriction release/i }).first(),
+        frame.getByText(/incluir nova libera..o de restri..o|new restriction release/i).first(),
+      ],
+      750,
+    );
+    if (startAnotherRelease) {
+      await startAnotherRelease.click({ force: true });
+      console.info("ticketlog.eva:new-release-option-clicked");
+      await this.page.waitForTimeout(250);
+      return frame;
+    }
+
+    const transactionsAvailable = await this.findVisibleOrNull(
+      [
+        frame.getByRole("button", { name: ticketLogUi.eva.transactions }).first(),
+        frame.getByText(ticketLogUi.eva.transactions).first(),
+      ],
+      500,
+    );
+    if (!transactionsAvailable) {
+      const backToMenu = await this.findVisibleOrNull(
+        [
+          frame.getByRole("button", { name: /voltar ao menu|back to menu/i }).first(),
+          frame.getByText(/voltar ao menu|back to menu/i).first(),
+        ],
+        750,
+      );
+      if (backToMenu) {
+        await backToMenu.click({ force: true });
+        console.info("ticketlog.eva:back-to-menu-clicked");
+        await this.page.waitForTimeout(300);
+        frame = await this.requireEvaSurface();
+      } else {
+        await this.closePanelIfOpen();
+        await this.open();
+        frame = await this.requireEvaSurface();
+        console.info("ticketlog.eva:conversation-reset-by-reopen");
+      }
+    }
 
     await this.clickEvaOption(frame, ticketLogUi.eva.transactions);
     await this.clickEvaOption(frame, ticketLogUi.eva.releaseFuelRestriction);
@@ -462,6 +521,19 @@ export class EvaPage {
     }
 
     throw new ManualInterventionError("VISIBLE_LOCATOR_NOT_FOUND");
+  }
+
+  private async findVisibleOrNull(candidates: Locator[], timeoutMs: number): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      for (const candidate of candidates) {
+        const locator = candidate.first();
+        if (await locator.isVisible().catch(() => false)) return locator;
+      }
+      if (Date.now() < deadline) await this.page.waitForTimeout(100);
+    } while (Date.now() < deadline);
+
+    return null;
   }
 
   private async findVisible(candidates: Locator[]): Promise<Locator> {
