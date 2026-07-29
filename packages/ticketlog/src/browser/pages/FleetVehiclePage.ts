@@ -473,12 +473,13 @@ export class FleetVehiclePage {
   }
 
   private async confirmLimitSubmission(): Promise<void> {
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       await this.dismissBlockingOverlays();
 
       const candidates: Locator[] = [
         this.page.locator("button.swal2-confirm, input.swal2-confirm").first(),
+        this.page.locator("div[role='dialog'] button, div[role='dialog'] input[type='button']").filter({ hasText: /confirmar|sim|alterar|ok/i }).first(),
         this.page.getByRole("button", { name: /confirmar|sim|alterar|ok/i }).first(),
         this.page.locator(".swal2-container button:visible, .swal2-container input:visible").first(),
       ];
@@ -491,15 +492,16 @@ export class FleetVehiclePage {
         }
       }
 
-      const frameStillOpen = await this.waitForChangeLimitFrame(750);
+      const frameStillOpen = await this.waitForChangeLimitFrame(1_250);
       if (!frameStillOpen) {
         return;
       }
-      await this.page.waitForTimeout(500);
+      await this.page.waitForTimeout(750);
     }
   }
 
   private async dismissBlockingOverlays(): Promise<void> {
+    await this.closeChromiumRestoreBubble();
     await this.closeEvaSuggestionPopup();
     await this.closeGenericModalButtons();
   }
@@ -507,13 +509,14 @@ export class FleetVehiclePage {
   private async closeEvaSuggestionPopup(): Promise<void> {
     const popup = this.page
       .locator("div, section, aside")
-      .filter({ has: this.page.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio/i).first() })
+      .filter({ has: this.page.getByText(/posso ajudar|liberar restri..o|motivo do bloqueio|transa..o foi negada/i).first() })
       .last();
 
     if (!(await popup.isVisible().catch(() => false))) return;
 
     const closeCandidates = [
       popup.locator("button[aria-label*='fechar' i], button[title*='fechar' i], button[aria-label*='close' i]").first(),
+      popup.locator("svg").locator("xpath=ancestor::*[@role='button' or self::button or self::a][1]").first(),
       popup.locator("button").filter({ hasNotText: /liberar restri..o/i }).first(),
       popup.locator("[role='button']").filter({ hasNotText: /liberar restri..o/i }).first(),
     ];
@@ -526,15 +529,50 @@ export class FleetVehiclePage {
       }
     }
 
-    await popup.evaluate((element) => {
+    const clickedViaDom = await popup.evaluate((element) => {
       const root = element as HTMLElement;
-      const clickable = Array.from(root.querySelectorAll("button, [role='button']")).find((node) => {
+      const clickable = Array.from(root.querySelectorAll("button, [role='button'], a, div, span")).find((node) => {
+        const html = node as HTMLElement;
         const text = (node.textContent ?? "").trim().toLowerCase();
-        return text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
+        const aria = (html.getAttribute("aria-label") ?? "").trim().toLowerCase();
+        const title = (html.getAttribute("title") ?? "").trim().toLowerCase();
+        const className = (html.className ?? "").toString().toLowerCase();
+        const style = window.getComputedStyle(html);
+        const rect = html.getBoundingClientRect();
+        const looksLikeClose =
+          aria.includes("fechar") ||
+          aria.includes("close") ||
+          title.includes("fechar") ||
+          title.includes("close") ||
+          className.includes("close") ||
+          className.includes("fechar");
+        const harmlessText = text.length === 0 || (!text.includes("liberar") && !text.includes("restri"));
+        const topRightCircle =
+          rect.width >= 16 &&
+          rect.width <= 60 &&
+          rect.height >= 16 &&
+          rect.height <= 60 &&
+          style.borderRadius.includes("50");
+
+        return (looksLikeClose || (harmlessText && topRightCircle)) && style.visibility !== "hidden";
       }) as HTMLElement | undefined;
       clickable?.click();
-    }).catch(() => undefined);
+      return Boolean(clickable);
+    }).catch(() => false);
     await this.page.waitForTimeout(300);
+    if (!(await popup.isVisible().catch(() => false))) return;
+
+    if (!clickedViaDom) {
+      const box = await popup.boundingBox().catch(() => null);
+      if (box) {
+        await this.page.mouse.click(box.x + box.width - 18, box.y + 18).catch(() => undefined);
+        await this.page.waitForTimeout(300);
+        if (!(await popup.isVisible().catch(() => false))) return;
+      }
+    }
+
+    await this.page.keyboard.press("Escape").catch(() => undefined);
+    await this.page.waitForTimeout(250);
   }
 
   private async closeGenericModalButtons(): Promise<void> {
@@ -550,6 +588,20 @@ export class FleetVehiclePage {
         await button.click({ force: true }).catch(() => undefined);
         await this.page.waitForTimeout(200);
       }
+    }
+  }
+
+  private async closeChromiumRestoreBubble(): Promise<void> {
+    const restoreClose = this.page.getByRole("button", { name: /restore pages\?|fechar|close/i }).last();
+    if (await restoreClose.isVisible().catch(() => false)) {
+      await restoreClose.click({ force: true }).catch(() => undefined);
+      await this.page.waitForTimeout(200);
+    }
+
+    const restoreDismiss = this.page.getByText(/chromium didn't shut down correctly|restore pages\?/i).first();
+    if (await restoreDismiss.isVisible().catch(() => false)) {
+      await this.page.keyboard.press("Escape").catch(() => undefined);
+      await this.page.waitForTimeout(200);
     }
   }
 }
