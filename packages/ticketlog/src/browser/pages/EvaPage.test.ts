@@ -100,6 +100,122 @@ test("opens EVA when the panel is rendered in the same legacy frame", async () =
   }
 });
 
+test("continues from the EVA transactions submenu when release is already visible", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section>
+        <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+        <button
+          id="release"
+          onclick="document.querySelector('#plate-form').hidden = false"
+        >Liberar abastecimento (restricao)</button>
+        <section id="plate-form" hidden>
+          <p>Digite o numero do cartao ou placa do veiculo</p>
+          <textarea aria-label="Placa"></textarea>
+          <button>Enviar</button>
+        </section>
+      </section>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(await page.getByRole("textbox").inputValue(), "PWH4E85");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("continues when EVA is already requesting the plate", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section>
+        <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+        <p>Digite o numero do cartao ou placa do veiculo</p>
+        <textarea aria-label="Placa"></textarea>
+        <button>Enviar</button>
+      </section>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.prepareFuelRestrictionDryRun("PWH4E85");
+
+    assert.equal(await page.getByRole("textbox").inputValue(), "PWH4E85");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("completes a release and waits for a new EVA confirmation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section>
+        <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+        <p>Pronto! Fiz a liberacao da restricao.</p>
+        <button
+          id="new-release"
+          onclick="document.querySelector('#plate-form').hidden = false"
+        >Incluir nova liberacao de restricao</button>
+        <section id="plate-form" hidden>
+          <p>Digite o numero do cartao ou placa do veiculo</p>
+          <textarea aria-label="Placa"></textarea>
+          <button
+            id="send"
+            onclick="document.querySelector('#new-confirmation').hidden = false"
+          >Enviar</button>
+        </section>
+        <p id="new-confirmation" hidden>Pronto! Fiz a liberacao da restricao.</p>
+      </section>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.releaseFuelRestriction("PWH4E85");
+
+    assert.equal(await page.getByRole("textbox").inputValue(), "PWH4E85");
+    assert.equal(await page.locator("#new-confirmation").isVisible(), true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("minimizes the EVA host and ignores its hidden iframe", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section class="eva-iframe-wrapper">
+        <header class="eva-header">
+          <div class="eva-minimize" role="button" style="width:25px;height:12px">-</div>
+        </header>
+        <iframe id="eva-chat"></iframe>
+      </section>
+      <script>
+        document.querySelector(".eva-minimize").addEventListener("click", () => {
+          document.querySelector("#eva-chat").style.display = "none";
+        });
+      </script>
+    `);
+    const chatFrame = page.frames().find((frame) => frame !== page.mainFrame());
+    assert.ok(chatFrame);
+    await chatFrame.setContent(`
+      <p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p>
+      <button>Transacoes</button>
+    `);
+
+    const eva = new EvaPage(page);
+    assert.equal(await eva.closePanelIfOpen(), true);
+    assert.equal(await page.locator("#eva-chat").isVisible(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("dismisses blocking EVA prompts before opening the operational chat", async () => {
   const browser = await chromium.launch({ headless: true });
   try {

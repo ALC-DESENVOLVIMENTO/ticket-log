@@ -56,9 +56,16 @@ export const ticketLogUi = {
       "#button-x:visible",
       "#button-x-notificacao:visible",
     ],
+    panelCloseSelectors: [
+      ".eva-header .eva-minimize:visible",
+      ".eva-minimize:visible",
+      "[class*='eva-header' i] [class*='minimize' i]:visible",
+    ],
     transactions: /^(?:transa..es|transactions)(?:\s|$)/i,
     releaseFuelRestriction:
       /liberar abastecimento.*restri|release fuel.*restrict/i,
+    platePrompt:
+      /(?:digite|informe|cole).*(?:n.mero do cart.o|cart.o ou placa|placa)|card number or plate/i,
     releaseConfirmation:
       /libera..o conclu.da|abastecimento liberado|restri..o (?:foi )?liberada|libera..o da restri..o (?:foi )?(?:conclu.da|realizada)|fiz a libera..o da restri|release completed|fueling released|restriction released/i,
   },

@@ -65,6 +65,7 @@ export class EvaPage {
     await textbox.fill(normalizePlate(plate));
     console.info("ticketlog.eva:plate-filled");
 
+    const confirmationCountBeforeSend = await this.countReleaseConfirmations(frame);
     await this.waitForVisible(
       [
         frame.getByRole("button", { name: /enviar|confirmar|send|confirm/i }),
@@ -73,7 +74,10 @@ export class EvaPage {
       10_000,
     ).then((locator) => locator.click());
 
-    const confirmation = await this.waitForEvaConfirmation(frame);
+    const confirmation = await this.waitForEvaConfirmation(
+      frame,
+      confirmationCountBeforeSend,
+    );
     if (!confirmation) {
       throw new ManualInterventionError("EVA_RELEASE_CONFIRMATION_NOT_FOUND");
     }
@@ -134,53 +138,123 @@ export class EvaPage {
 
   private async openReleaseFuelRestrictionFlow(): Promise<Frame> {
     await this.open();
-    let frame = await this.requireEvaSurface();
+    let resetAttempted = false;
+    let plateEntryExpected = false;
 
-    const startAnotherRelease = await this.findVisibleOrNull(
-      [
-        frame.getByRole("button", { name: /incluir nova libera..o de restri..o|new restriction release/i }).first(),
-        frame.getByText(/incluir nova libera..o de restri..o|new restriction release/i).first(),
-      ],
-      750,
-    );
-    if (startAnotherRelease) {
-      await startAnotherRelease.click({ force: true });
-      console.info("ticketlog.eva:new-release-option-clicked");
-      await this.page.waitForTimeout(250);
-      return frame;
-    }
+    for (let transition = 0; transition < 10; transition += 1) {
+      const frame = await this.requireEvaSurface();
 
-    const transactionsAvailable = await this.findVisibleOrNull(
-      [
-        frame.getByRole("button", { name: ticketLogUi.eva.transactions }).first(),
-        frame.getByText(ticketLogUi.eva.transactions).first(),
-      ],
-      500,
-    );
-    if (!transactionsAvailable) {
+      if (plateEntryExpected && (await this.hasVisibleTextEntry(frame))) {
+        console.info("ticketlog.eva:plate-entry-visible");
+        return frame;
+      }
+
+      const startAnotherRelease = await this.findVisibleOrNull(
+        [
+          frame.getByRole("button", { name: /incluir nova libera..o de restri..o|new restriction release/i }).first(),
+          frame.getByText(/incluir nova libera..o de restri..o|new restriction release/i).first(),
+        ],
+        400,
+      );
+      if (startAnotherRelease) {
+        await startAnotherRelease.click({ force: true });
+        plateEntryExpected = true;
+        console.info("ticketlog.eva:new-release-option-clicked");
+        await this.page.waitForTimeout(500);
+        continue;
+      }
+
+      const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      if (ticketLogUi.eva.platePrompt.test(body)) {
+        console.info("ticketlog.eva:plate-prompt-ready");
+        return frame;
+      }
+
+      const releaseOption = await this.findVisibleOrNull(
+        [
+          frame.getByRole("button", { name: ticketLogUi.eva.releaseFuelRestriction }).first(),
+          frame.getByText(ticketLogUi.eva.releaseFuelRestriction).first(),
+        ],
+        400,
+      );
+      if (releaseOption) {
+        await releaseOption.click({ force: true });
+        plateEntryExpected = true;
+        console.info(
+          { option: ticketLogUi.eva.releaseFuelRestriction.source },
+          "ticketlog.eva:option-clicked",
+        );
+        await this.page.waitForTimeout(500);
+        continue;
+      }
+
+      const transactionsOption = await this.findVisibleOrNull(
+        [
+          frame.getByRole("button", { name: ticketLogUi.eva.transactions }).first(),
+          frame.getByText(ticketLogUi.eva.transactions).first(),
+        ],
+        400,
+      );
+      if (transactionsOption) {
+        await transactionsOption.click({ force: true });
+        console.info(
+          { option: ticketLogUi.eva.transactions.source },
+          "ticketlog.eva:option-clicked",
+        );
+        await this.page.waitForTimeout(500);
+        continue;
+      }
+
       const backToMenu = await this.findVisibleOrNull(
         [
           frame.getByRole("button", { name: /voltar ao menu|back to menu/i }).first(),
           frame.getByText(/voltar ao menu|back to menu/i).first(),
         ],
-        750,
+        400,
       );
       if (backToMenu) {
         await backToMenu.click({ force: true });
         console.info("ticketlog.eva:back-to-menu-clicked");
-        await this.page.waitForTimeout(300);
-        frame = await this.requireEvaSurface();
-      } else {
-        await this.closePanelIfOpen();
-        await this.open();
-        frame = await this.requireEvaSurface();
-        console.info("ticketlog.eva:conversation-reset-by-reopen");
+        await this.page.waitForTimeout(500);
+        continue;
       }
+
+      const finishConversation = await this.findVisibleOrNull(
+        [
+          frame.getByRole("button", { name: /sair e avaliar|exit and rate/i }).first(),
+          frame.getByText(/sair e avaliar|exit and rate/i).first(),
+        ],
+        400,
+      );
+      if (finishConversation) {
+        await finishConversation.click({ force: true });
+        console.info("ticketlog.eva:conversation-finished");
+        await this.page.waitForTimeout(750);
+        await this.open();
+        continue;
+      }
+
+      if (!resetAttempted) {
+        resetAttempted = true;
+        const closed = await this.closePanelIfOpen(750);
+        if (closed) {
+          await this.open();
+          console.info("ticketlog.eva:conversation-reset-by-reopen");
+          continue;
+        }
+      }
+
+      if (transition < 2) {
+        await this.page.waitForTimeout(1_000);
+        continue;
+      }
+
+      await this.logEvaOpenDiagnostics();
+      throw new ManualInterventionError("EVA_FLOW_STATE_UNRECOGNIZED");
     }
 
-    await this.clickEvaOption(frame, ticketLogUi.eva.transactions);
-    await this.clickEvaOption(frame, ticketLogUi.eva.releaseFuelRestriction);
-    return frame;
+    await this.logEvaOpenDiagnostics();
+    throw new ManualInterventionError("EVA_FLOW_TRANSITION_LIMIT");
   }
 
   private async clickEvaOption(frame: Frame, name: RegExp): Promise<void> {
@@ -206,6 +280,8 @@ export class EvaPage {
     while (Date.now() < deadline) {
       let bestCandidate: { frame: Frame; score: number } | null = null;
       for (const frame of this.page.frames()) {
+        if (!(await this.isFrameRendered(frame))) continue;
+
         const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
         if (!isEvaFrameCandidate(frame.url(), body)) continue;
 
@@ -250,7 +326,10 @@ export class EvaPage {
     throw new ManualInterventionError("EVA_URL_REJECTED");
   }
 
-  private async waitForEvaConfirmation(frame: Frame): Promise<string | null> {
+  private async waitForEvaConfirmation(
+    frame: Frame,
+    confirmationCountBeforeSend: number,
+  ): Promise<string | null> {
     const deadline = Date.now() + 45_000;
 
     while (Date.now() < deadline) {
@@ -260,7 +339,14 @@ export class EvaPage {
         await this.closePanelIfOpen().catch(() => false);
         throw new ManualInterventionError("EVA_URL_REJECTED");
       }
-      if (isEvaReleaseConfirmation(body)) return body.slice(0, 500);
+      if (
+        isEvaReleaseConfirmation(body) &&
+        (confirmationCountBeforeSend === 0 ||
+          (await this.countReleaseConfirmations(frame)) >
+            confirmationCountBeforeSend)
+      ) {
+        return body.slice(0, 500);
+      }
       await this.page.waitForTimeout(500);
     }
 
@@ -435,6 +521,15 @@ export class EvaPage {
 
   private async closeOneEvaPanel(): Promise<boolean> {
     for (const scope of [this.page, ...this.page.frames()]) {
+      for (const selector of ticketLogUi.eva.panelCloseSelectors) {
+        const closeControl = scope.locator(selector).first();
+        if (await closeControl.isVisible().catch(() => false)) {
+          await closeControl.click({ force: true }).catch(() => undefined);
+          console.info({ selector }, "ticketlog.eva:panel-close-control-clicked");
+          return true;
+        }
+      }
+
       const namedClose = await this.findVisible([
         scope.getByRole("button", { name: /minimi[sz]ar|fechar|close|minimi[sz]e/i }).first(),
         scope.locator("button[aria-label*='minim' i], button[title*='minim' i]").first(),
@@ -533,6 +628,31 @@ export class EvaPage {
       }
     }
 
+    return false;
+  }
+
+  private async isFrameRendered(frame: Frame): Promise<boolean> {
+    if (frame === this.page.mainFrame()) return true;
+    const frameElement = await frame.frameElement().catch(() => null);
+    if (!frameElement) return false;
+    return frameElement.isVisible().catch(() => false);
+  }
+
+  private async countReleaseConfirmations(frame: Frame): Promise<number> {
+    const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+    const pattern = new RegExp(ticketLogUi.eva.releaseConfirmation.source, "gi");
+    return body.match(pattern)?.length ?? 0;
+  }
+
+  private async hasVisibleTextEntry(frame: Frame): Promise<boolean> {
+    const candidates = [
+      frame.getByRole("textbox").last(),
+      frame.locator("textarea:visible").last(),
+      frame.locator("input:visible").last(),
+    ];
+    for (const candidate of candidates) {
+      if (await candidate.isVisible().catch(() => false)) return true;
+    }
     return false;
   }
 
