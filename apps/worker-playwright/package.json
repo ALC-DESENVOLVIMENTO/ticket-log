@@ -5,6 +5,7 @@
   "main": "dist/worker.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/**/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx watch src/worker.ts",
     "start": "node dist/worker.js"

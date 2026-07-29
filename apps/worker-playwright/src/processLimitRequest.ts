@@ -20,6 +20,7 @@ import {
   handleTicketLogOperationalEvent,
   updateOperationalRuntime,
 } from "./operationalRuntime.js";
+import { needsLimitChangedTransition } from "./resumeState.js";
 import { notifyWhatsappResolvedRequest } from "./whatsappNotifier.js";
 
 type AutomationStepKey = "CHANGE_LIMIT" | "EVA_RELEASE";
@@ -135,7 +136,9 @@ export async function processLimitRequest(requestId: string, options: ProcessLim
       currentStep = "EVA_RELEASE";
       await updateOperationalRuntime({ currentStep, statusMessage: "Retomando pela EVA" });
       console.info({ requestId }, "processLimitRequest:change-limit-already-done");
-      await transitionRequest(requestId, "LIMITE_ALTERADO");
+      if (needsLimitChangedTransition(request.status)) {
+        await transitionRequest(requestId, "LIMITE_ALTERADO");
+      }
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "RUNNING" });
       await provider.releaseEvaOnly({ requestId, vehiclePlate: request.vehicle_plate });
       await upsertAutomationStep({ requestId, stepKey: "EVA_RELEASE", status: "DONE" });
