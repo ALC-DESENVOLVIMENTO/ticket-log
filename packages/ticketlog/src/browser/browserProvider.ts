@@ -107,6 +107,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Alterando limite do veiculo" });
       console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:authenticated");
 
+      await new EvaPage(page).closePanelIfOpen();
       const fleet = new FleetVehiclePage(page);
       await fleet.gotoVehicleList();
       console.info({ requestId: input.requestId, url: page.url() }, "ticketlog.changeLimit:vehicle-list-open");
@@ -289,6 +290,7 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await eva.open();
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:panel-open");
       await eva.releaseFuelRestriction(input.vehiclePlate);
+      await eva.closePanelIfOpen();
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:released");
       await this.saveStorageState(context);
     } finally {

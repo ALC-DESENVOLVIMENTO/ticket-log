@@ -65,6 +65,28 @@ export class EvaPage {
     console.info("ticketlog.eva:release-confirmed");
   }
 
+  async closePanelIfOpen(timeoutMs = 1_500): Promise<boolean> {
+    if (!(await this.getEvaSurface(timeoutMs))) return false;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const closed = await this.closeOneEvaPanel();
+      if (closed) {
+        await this.page.waitForTimeout(500);
+        if (!(await this.getEvaSurface(750))) {
+          console.info("ticketlog.eva:panel-closed");
+          return true;
+        }
+      }
+    }
+
+    await this.page.keyboard.press("Escape").catch(() => undefined);
+    await this.page.waitForTimeout(500);
+    const panelClosed = !(await this.getEvaSurface(750));
+    if (panelClosed) console.info("ticketlog.eva:panel-closed-with-escape");
+    else console.warn("ticketlog.eva:panel-still-open");
+    return panelClosed;
+  }
+
   async prepareFuelRestrictionDryRun(plate: string): Promise<void> {
     const frame = await this.openReleaseFuelRestrictionFlow();
     const textbox = await this.findVisible([
@@ -289,6 +311,109 @@ export class EvaPage {
         .catch(() => false);
       if (result) {
         console.info("ticketlog.eva:blocking-prompt-closed");
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async closeOneEvaPanel(): Promise<boolean> {
+    for (const scope of [this.page, ...this.page.frames()]) {
+      const namedClose = await this.findVisible([
+        scope.getByRole("button", { name: /minimi[sz]ar|fechar|close|minimi[sz]e/i }).first(),
+        scope.locator("button[aria-label*='minim' i], button[title*='minim' i]").first(),
+        scope.locator("button[aria-label*='fechar' i], button[title*='fechar' i]").first(),
+        scope.locator("button[aria-label*='close' i], button[title*='close' i]").first(),
+      ]).catch(() => null);
+
+      if (namedClose) {
+        await namedClose.click({ force: true }).catch(() => undefined);
+        console.info("ticketlog.eva:panel-close-control-clicked");
+        return true;
+      }
+
+      const result = await scope
+        .locator("body")
+        .evaluate((body, rootPatternSource) => {
+          const normalize = (value: string) =>
+            value
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim();
+          const rootPattern = new RegExp(rootPatternSource, "i");
+          const rejectText =
+            /incluir nova liberacao|voltar ao menu|sair e avaliar|liberar abastecimento|transacoes|enviar|confirmar|digite aqui/.source;
+          const rejectPattern = new RegExp(rejectText, "i");
+          const elements = Array.from(
+            body.querySelectorAll<HTMLElement>("div, section, article, aside, [role='dialog'], body"),
+          );
+          const panels = elements
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              const text = normalize(node.innerText ?? node.textContent ?? "");
+              return { node, rect, text, area: rect.width * rect.height };
+            })
+            .filter(
+              ({ rect, text }) =>
+                rootPattern.test(text) &&
+                rect.width >= 240 &&
+                rect.height >= 220 &&
+                rect.bottom > 0 &&
+                rect.right > 0 &&
+                rect.top < window.innerHeight &&
+                rect.left < window.innerWidth,
+            )
+            .sort((left, right) => left.area - right.area);
+
+          for (const { node: panel, rect: panelRect } of panels) {
+            const controls = Array.from(
+              panel.querySelectorAll<HTMLElement>("button, [role='button'], a, div, span, svg"),
+            )
+              .map((control) => {
+                const rect = control.getBoundingClientRect();
+                const text = normalize(control.innerText ?? control.textContent ?? "");
+                const metadata = normalize(
+                  `${control.getAttribute("aria-label") ?? ""} ${control.getAttribute("title") ?? ""} ${control.className?.toString() ?? ""} ${control.id ?? ""}`,
+                );
+                const style = window.getComputedStyle(control);
+                const explicitClose =
+                  /minimi[sz]ar|fechar|close|minimi[sz]e/.test(metadata) || /^(?:-|–|—|x|×)$/.test(text);
+                const topRightControl =
+                  rect.width >= 8 &&
+                  rect.width <= 90 &&
+                  rect.height >= 8 &&
+                  rect.height <= 90 &&
+                  rect.left >= panelRect.right - 130 &&
+                  rect.right <= panelRect.right + 40 &&
+                  rect.top >= panelRect.top - 40 &&
+                  rect.top <= panelRect.top + 120 &&
+                  !rejectPattern.test(text) &&
+                  (control.tagName === "BUTTON" ||
+                    control.getAttribute("role") === "button" ||
+                    style.cursor === "pointer" ||
+                    Boolean(control.querySelector("svg")));
+                return { control, rect, explicitClose, topRightControl };
+              })
+              .filter(({ explicitClose, topRightControl }) => explicitClose || topRightControl)
+              .sort((left, right) => {
+                if (left.explicitClose !== right.explicitClose) return left.explicitClose ? -1 : 1;
+                return right.rect.right - left.rect.right || left.rect.top - right.rect.top;
+              });
+
+            const target = controls[0]?.control;
+            if (!target) continue;
+            target.click();
+            return true;
+          }
+
+          return false;
+        }, ticketLogUi.eva.rootText.source)
+        .catch(() => false);
+      if (result) {
+        console.info("ticketlog.eva:panel-close-control-clicked");
         return true;
       }
     }

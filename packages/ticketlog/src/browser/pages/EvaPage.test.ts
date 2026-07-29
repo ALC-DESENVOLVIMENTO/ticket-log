@@ -138,3 +138,30 @@ test("dismisses blocking EVA prompts before opening the operational chat", async
     await browser.close();
   }
 });
+
+test("closes an open EVA chat panel after release", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section id="eva-panel" style="position:fixed;right:40px;top:40px;width:320px;height:520px">
+        <header>
+          <strong>EVA</strong>
+          <button id="minimize" style="position:absolute;right:6px;top:6px">-</button>
+        </header>
+        <p>O que voce quer falar sobre transacoes?</p>
+        <p>Pronto! Fiz a liberacao da restricao.</p>
+        <textarea aria-label="Digite aqui sua duvida"></textarea>
+      </section>
+      <script>
+        document.querySelector("#minimize").addEventListener("click", () => document.querySelector("#eva-panel").remove());
+      </script>
+    `);
+
+    const eva = new EvaPage(page);
+    assert.equal(await eva.closePanelIfOpen(), true);
+    assert.equal(await page.locator("#eva-panel").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
