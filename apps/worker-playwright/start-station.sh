@@ -66,6 +66,11 @@ http {
   server {
     listen ${PORT:-8080};
 
+    location = /healthz {
+      add_header Content-Type text/plain;
+      return 200 "ok\n";
+    }
+
     location / {
       if (\$station_authorized = 0) { return 403; }
       add_header Set-Cookie "station_access=${TICKETLOG_OPERATOR_ACCESS_TOKEN}; Path=/; HttpOnly; Secure; SameSite=None" always;

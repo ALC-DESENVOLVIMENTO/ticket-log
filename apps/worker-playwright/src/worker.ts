@@ -98,8 +98,31 @@ const worker = new Worker<LimitJobData>(
   },
 );
 
+worker.on("ready", () => {
+  logger.info(
+    {
+      queue: limitQueueName,
+      concurrency: Number(process.env.WORKER_CONCURRENCY ?? 1),
+      stationMode: process.env.TICKETLOG_STATION_MODE === "true",
+      recoveryIntervalMs,
+    },
+    "worker ready and waiting for jobs",
+  );
+});
+
 worker.on("completed", (job) => {
   logger.info({ jobId: job.id, requestId: job.data.requestId }, "job completed");
+});
+
+worker.on("error", (error) => {
+  logger.error(
+    {
+      errorName: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    },
+    "worker connection error",
+  );
 });
 
 worker.on("failed", (job, error) => {
