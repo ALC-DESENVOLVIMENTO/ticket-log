@@ -335,7 +335,7 @@ function hasFailedStep(steps: any[], stepKey: string) {
 
 function displayRequestStatus(request: any, steps: any[] = []) {
   if (hasCompletedStep(steps, "CHANGE_LIMIT") && hasFailedStep(steps, "EVA_RELEASE")) {
-    return "EVA_PENDENTE";
+    return "Aguardando liberacao";
   }
 
   if (
@@ -344,11 +344,11 @@ function displayRequestStatus(request: any, steps: any[] = []) {
     /ALTERACAO|LIMIT_VERIFIED|CONFIRMADA/i.test(String(request.platform_result)) &&
     ["FALHA_MANUAL", "FALHA_REPROCESSAVEL", "RESULTADO_INDETERMINADO"].includes(request?.status)
   ) {
-    return "EVA_PENDENTE";
+    return "Aguardando liberacao";
   }
 
   if (request?.status === "LIMITE_ALTERADO") {
-    return "EVA_PENDENTE";
+    return "Aguardando liberacao";
   }
 
   return request?.status ?? "n/d";
@@ -372,7 +372,7 @@ function statusTone(status: string | undefined) {
     case "EM_PROCESSAMENTO":
     case "NA_FILA":
     case "LIMITE_ALTERADO":
-    case "EVA_PENDENTE":
+    case "Aguardando liberacao":
       return "processing";
     case "FALHA_MANUAL":
     case "FALHA_REPROCESSAVEL":
@@ -385,6 +385,20 @@ function statusTone(status: string | undefined) {
     default:
       return "neutral";
   }
+}
+
+function getFriendlyEventName(eventType: string) {
+  const map: Record<string, string> = {
+    REQUEST_STATE_CHANGED: "Status alterado",
+    AUTOMATION_RETRY_EXHAUSTED: "Tentativas de automacao esgotadas",
+    AUTOMATION_RETRY_SCHEDULED: "Nova tentativa agendada",
+    OPERATION_TAKEOVER_CLAIMED: "Assumido manualmente",
+    REQUEST_REENQUEUED: "Solicitacao reenfileirada",
+    APPROVAL_LINK_REISSUED: "Link de aprovacao reemitido",
+    REQUEST_CREATED_OR_REUSED: "Solicitacao criada",
+    REQUEST_APPROVAL_RECORDED: "Aprovacao registrada",
+  };
+  return map[eventType] ?? eventType;
 }
 
 function LoginView({ onLoggedIn }: { onLoggedIn: (requiresMfaSetup: boolean) => void }) {
@@ -608,7 +622,7 @@ function RequestPanel({
         <select value={vehicleGroup} onChange={(event) => setVehicleGroup(event.target.value)} disabled={!user?.access?.canCreateWebRequest}>
           {(publicConfig?.vehicleGroups ?? []).map((group: any) => (
             <option key={group.key} value={group.key}>
-              {group.label} - limite {money(group.maxAmount)}
+              {group.label}
             </option>
           ))}
         </select>
@@ -788,7 +802,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
           </div>
           <div className="detail-grid">
             <span>Grupo: {request.vehicle_group}</span>
-            <span>Canal: {request.channel}</span>
+            <span>Canal: {request.channel}{request.requester_phone ? ` (${maskPhone(request.requester_phone)})` : ""}</span>
             <span>Limite anterior: {request.previous_limit ? money(request.previous_limit) : "n/d"}</span>
             <span>Novo limite: {request.new_limit ? money(request.new_limit) : "n/d"}</span>
             <span>Resultado plataforma: {request.platform_result ?? "aguardando"}</span>
@@ -856,7 +870,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
               <div className="timeline-list">
                 {events.map((event: any, index: number) => (
                   <div key={`${event.event_type}-${index}`} className="timeline-row">
-                    <strong>{event.event_type}</strong>
+                    <strong>{getFriendlyEventName(event.event_type)}</strong>
                     <span>{appDateTime(event.created_at)}</span>
                   </div>
                 ))}

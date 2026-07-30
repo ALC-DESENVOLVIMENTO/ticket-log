@@ -17,11 +17,20 @@ export class EvaPage {
   }
 
   async open(): Promise<void> {
+    await this.dismissRejectedEvaSurfaces();
+
     const existingSurface = await this.getEvaSurface(500);
     if (existingSurface) {
       if (!(await this.isRejectedSurface(existingSurface))) return;
 
       console.warn("ticketlog.eva:rejected-url-detected");
+      if (await this.recoverRejectedSurface(existingSurface)) {
+        const recoveredSurface = await this.getEvaSurface(4_000);
+        if (recoveredSurface && !(await this.isRejectedSurface(recoveredSurface))) {
+          await this.assertSurfaceAccepted(recoveredSurface);
+          return;
+        }
+      }
       if (!(await this.closePanelIfOpen())) {
         throw new ManualInterventionError("EVA_URL_REJECTED");
       }
@@ -37,6 +46,22 @@ export class EvaPage {
     await this.clickEvaLauncher(evaButton);
     const openedSurface = await this.getEvaSurface(8_000);
     if (openedSurface) {
+      if (await this.isRejectedSurface(openedSurface)) {
+        console.warn("ticketlog.eva:rejected-url-detected");
+        if (await this.recoverRejectedSurface(openedSurface)) {
+          const recoveredSurface = await this.getEvaSurface(4_000);
+          if (recoveredSurface && !(await this.isRejectedSurface(recoveredSurface))) {
+            await this.assertSurfaceAccepted(recoveredSurface);
+            return;
+          }
+        }
+        if (!(await this.closePanelIfOpen())) {
+          throw new ManualInterventionError("EVA_URL_REJECTED");
+        }
+        console.info("ticketlog.eva:rejected-panel-closed");
+        return;
+      }
+
       await this.assertSurfaceAccepted(openedSurface);
       return;
     }
@@ -120,6 +145,10 @@ export class EvaPage {
     const panelClosed = !(await this.getEvaSurface(750));
     if (panelClosed) console.info("ticketlog.eva:panel-closed-with-escape");
     else console.warn("ticketlog.eva:panel-still-open");
+
+    if (!panelClosed) {
+      await this.dismissRejectedEvaSurfaces().catch(() => undefined);
+    }
     return panelClosed;
   }
 
@@ -142,6 +171,9 @@ export class EvaPage {
     let plateEntryExpected = false;
 
     for (let transition = 0; transition < 10; transition += 1) {
+      await this.dismissRejectedEvaSurfaces();
+      await this.dismissBlockingEvaPrompts();
+
       const frame = await this.requireEvaSurface();
 
       if (plateEntryExpected && (await this.hasVisibleTextEntry(frame))) {
@@ -316,6 +348,65 @@ export class EvaPage {
   private async isRejectedSurface(frame: Frame): Promise<boolean> {
     const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
     return ticketLogUi.eva.rejectedPage.test(body);
+  }
+
+  private async recoverRejectedSurface(frame: Frame): Promise<boolean> {
+    const goBack = await this.findVisibleOrNull(
+      [
+        frame.getByRole("link", { name: /go back|voltar|back/i }).first(),
+        frame.getByRole("button", { name: /go back|voltar|back/i }).first(),
+        frame.getByText(/go back|voltar|back/i).first(),
+      ],
+      1_000,
+    );
+    if (!goBack) return false;
+
+    await goBack.click({ force: true }).catch(() => undefined);
+    console.info("ticketlog.eva:rejected-surface-go-back-clicked");
+    await this.page.waitForTimeout(500);
+    return true;
+  }
+
+  private async removeDetachedSurface(frame: Frame): Promise<boolean> {
+    const frameElement = await frame.frameElement().catch(() => null);
+    if (!frameElement) return false;
+
+    await frameElement.evaluate((element) => {
+      if (element instanceof HTMLElement) {
+        element.remove();
+      }
+    }).catch(() => undefined);
+    console.info({ url: frame.url() }, "ticketlog.eva:surface-removed-from-dom");
+    return true;
+  }
+
+  private async dismissRejectedEvaSurfaces(): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const surfaces = await this.findRejectedEvaSurfaces();
+      if (surfaces.length === 0) return;
+
+      for (const frame of surfaces) {
+        const recovered = await this.recoverRejectedSurface(frame).catch(() => false);
+        if (!recovered) {
+          await this.removeDetachedSurface(frame).catch(() => undefined);
+        }
+      }
+
+      await this.closePanelIfOpen().catch(() => false);
+      await this.page.waitForTimeout(500);
+    }
+  }
+
+  private async findRejectedEvaSurfaces(): Promise<Frame[]> {
+    const surfaces: Frame[] = [];
+    for (const frame of this.page.frames()) {
+      if (!(await this.isFrameRendered(frame))) continue;
+      const body = await frame.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      if (ticketLogUi.eva.rejectedPage.test(body)) {
+        surfaces.push(frame);
+      }
+    }
+    return surfaces;
   }
 
   private async assertSurfaceAccepted(frame: Frame): Promise<void> {

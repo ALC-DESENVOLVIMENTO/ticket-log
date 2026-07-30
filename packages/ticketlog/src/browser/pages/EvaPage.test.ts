@@ -385,7 +385,7 @@ test("closes a stale rejected EVA page before opening a fresh conversation", asy
   }
 });
 
-test("reports EVA_URL_REJECTED when a new EVA session is rejected", async () => {
+test("closes a rejected EVA session when Go Back recovery is unavailable", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -405,11 +405,48 @@ test("reports EVA_URL_REJECTED when a new EVA session is rejected", async () => 
     `);
 
     const eva = new EvaPage(page);
-    await assert.rejects(
-      () => eva.open(),
-      (error: unknown) => error instanceof Error && error.message === "EVA_URL_REJECTED",
-    );
+    await eva.open();
     assert.equal(await page.locator("#eva-panel").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("recovers a rejected EVA surface by following the Go Back link", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const rejectedSurfaceHtml = JSON.stringify(`
+      <p>The requested URL was rejected. Please consult with your administrator.</p>
+      <p>Your support ID is: 789</p>
+      <a
+        href="#"
+        onclick="parent.recoverEva(); return false;"
+      >Go Back</a>
+    `);
+    await page.setContent(`
+      <button id="gea-gestor-eva-container">EVA</button>
+      <script>
+        window.recoverEva = () => {
+          document.querySelector("#eva-panel")?.remove();
+          document.body.insertAdjacentHTML("beforeend", '<section id="eva-panel-fresh"><p>Ola! Sou a EVA, a assistente virtual da Ticket Log.</p></section>');
+        };
+        document.querySelector("#gea-gestor-eva-container").addEventListener("click", () => {
+          const panel = document.createElement("section");
+          panel.id = "eva-panel";
+          panel.innerHTML = '<button aria-label="Minimize">-</button><iframe id="eva-frame"></iframe>';
+          document.body.appendChild(panel);
+          panel.querySelector("button").addEventListener("click", () => panel.remove());
+          panel.querySelector("iframe").srcdoc = ${rejectedSurfaceHtml};
+        });
+      </script>
+    `);
+
+    const eva = new EvaPage(page);
+    await eva.open();
+
+    assert.equal(await page.locator("#eva-panel").count(), 0);
+    assert.equal(await page.locator("#eva-panel-fresh").count(), 1);
   } finally {
     await browser.close();
   }

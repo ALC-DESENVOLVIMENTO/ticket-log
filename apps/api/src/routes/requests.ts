@@ -184,6 +184,15 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     ]);
     const steps = stepsResult.rows;
     const events = eventsResult.rows;
+
+    const phoneResult = await getPool().query(
+      `select phone_e164 from authorized_phones where user_id = $1 limit 1`,
+      [found.requester_id]
+    );
+    if (phoneResult.rows.length > 0) {
+      (found as any).requester_phone = phoneResult.rows[0].phone_e164;
+    }
+
     return { request: found, steps, events };
   });
 

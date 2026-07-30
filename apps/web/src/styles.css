@@ -230,7 +230,7 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(17, 17, 17, 0.05);
-  padding: 22px;
+  padding: 16px;
 }
 
 .panel {
@@ -252,7 +252,7 @@ h2 {
 
 form {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 label {
@@ -267,8 +267,8 @@ textarea {
   background: white;
   border: 1px solid #cfd5dc;
   border-radius: 6px;
-  min-height: 40px;
-  padding: 9px 11px;
+  min-height: 36px;
+  padding: 8px 10px;
 }
 
 input:focus,
