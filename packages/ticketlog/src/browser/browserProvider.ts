@@ -279,10 +279,14 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
       await this.emit({ status: "AUTOMATING", currentUrl: page.url(), message: "Liberando restricao pela EVA" });
       const eva = new EvaPage(page);
 
-      await eva.closePanelIfOpen().catch(() => false);
-      await this.openEvaHostPage(page);
-      console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
-      await eva.closePanelIfOpen().catch(() => false);
+      await eva.closePanelIfOpen(600).catch(() => false);
+      if (await eva.isAvailable(1_200)) {
+        console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:current-page-host");
+      } else {
+        await this.openEvaHostPage(page);
+        console.info({ plate: input.vehiclePlate, url: page.url() }, "ticketlog.releaseEva:host-open");
+        await eva.closePanelIfOpen(600).catch(() => false);
+      }
 
       await eva.open();
       console.info({ plate: input.vehiclePlate }, "ticketlog.releaseEva:panel-open");
@@ -361,9 +365,10 @@ export class BrowserTicketLogProvider implements TicketLogProvider {
   private async openEvaHostPage(page: Page): Promise<void> {
     const homeUrl = process.env.TICKETLOG_HOME_URL ?? "https://plataforma.ticketlog.com.br/home";
     const fleet = new FleetVehiclePage(page);
+    const stationMode = process.env.TICKETLOG_STATION_MODE === "true";
 
-    if (process.env.TICKETLOG_STATION_MODE === "true") {
-      await fleet.gotoHome();
+    if (stationMode) {
+      await fleet.gotoHome({ allowDirectFallback: false });
       return;
     }
 

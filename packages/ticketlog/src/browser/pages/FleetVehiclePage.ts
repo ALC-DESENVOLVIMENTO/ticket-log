@@ -44,7 +44,8 @@ export class FleetVehiclePage {
     }
   }
 
-  async gotoHome(): Promise<void> {
+  async gotoHome(options: { allowDirectFallback?: boolean } = {}): Promise<void> {
+    const allowDirectFallback = options.allowDirectFallback ?? true;
     await this.dismissBlockingOverlays();
     if (await this.waitForHomeReady(1_500)) return;
 
@@ -56,7 +57,7 @@ export class FleetVehiclePage {
     }
 
     const homeUrl = process.env.TICKETLOG_HOME_URL;
-    if (!homeUrl) {
+    if (!allowDirectFallback || !homeUrl) {
       if (uiNavigationError instanceof Error) throw uiNavigationError;
       throw new ManualInterventionError("HOME_UI_NAVIGATION_FAILED");
     }
