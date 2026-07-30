@@ -335,7 +335,7 @@ function hasFailedStep(steps: any[], stepKey: string) {
 
 function displayRequestStatus(request: any, steps: any[] = []) {
   if (hasCompletedStep(steps, "CHANGE_LIMIT") && hasFailedStep(steps, "EVA_RELEASE")) {
-    return "Aguardando liberacao";
+    return "Aguardando liberação";
   }
 
   if (
@@ -344,20 +344,19 @@ function displayRequestStatus(request: any, steps: any[] = []) {
     /ALTERACAO|LIMIT_VERIFIED|CONFIRMADA/i.test(String(request.platform_result)) &&
     ["FALHA_MANUAL", "FALHA_REPROCESSAVEL", "RESULTADO_INDETERMINADO"].includes(request?.status)
   ) {
-    return "Aguardando liberacao";
+    return "Aguardando liberação";
   }
 
   if (request?.status === "LIMITE_ALTERADO") {
-    return "Aguardando liberacao";
+    return "Aguardando liberação";
   }
 
-  return request?.status ?? "n/d";
+  return getFriendlyStatus(request?.status);
 }
 
 function maskPhone(phoneE164: string | undefined) {
   if (!phoneE164) return "n/d";
-  if (phoneE164.length <= 4) return "****";
-  return `${phoneE164.slice(0, Math.max(0, phoneE164.length - 4))}****`;
+  return phoneE164;
 }
 
 function ErrorBox({ error }: { error: string }) {
@@ -367,24 +366,130 @@ function ErrorBox({ error }: { error: string }) {
 function statusTone(status: string | undefined) {
   switch (status) {
     case "CONCLUIDA":
+    case "Concluída":
     case "EVA_LIBERADA":
+    case "EVA liberada":
+    case "DONE":
+    case "Concluído":
       return "success";
     case "EM_PROCESSAMENTO":
+    case "Em processamento":
     case "NA_FILA":
+    case "Na fila":
     case "LIMITE_ALTERADO":
-    case "Aguardando liberacao":
+    case "Limite alterado":
+    case "RUNNING":
+    case "Executando":
+    case "PENDING":
+    case "Pendente":
+    case "Aguardando liberação":
       return "processing";
     case "FALHA_MANUAL":
+    case "Falha manual":
     case "FALHA_REPROCESSAVEL":
+    case "Falha reprocessável":
     case "RESULTADO_INDETERMINADO":
+    case "Resultado indeterminado":
+    case "FAILED":
+    case "Falhou":
       return "warning";
     case "REJEITADA":
+    case "Rejeitada":
     case "CANCELADA":
+    case "Cancelada":
     case "EXPIRADA":
+    case "Expirada":
       return "danger";
     default:
       return "neutral";
   }
+}
+
+function getFriendlyStatus(status: string | undefined) {
+  const map: Record<string, string> = {
+    RASCUNHO: "Rascunho",
+    AGUARDANDO_AUTENTICACAO: "Aguardando autenticação",
+    AGUARDANDO_APROVACAO: "Aguardando aprovação",
+    AGUARDANDO_SEGUNDA_APROVACAO: "Aguardando segunda aprovação",
+    NA_FILA: "Na fila",
+    EM_PROCESSAMENTO: "Em processamento",
+    LIMITE_ALTERADO: "Limite alterado",
+    EVA_LIBERADA: "EVA liberada",
+    CONCLUIDA: "Concluída",
+    REJEITADA: "Rejeitada",
+    EXPIRADA: "Expirada",
+    CANCELADA: "Cancelada",
+    FALHA_REPROCESSAVEL: "Falha reprocessável",
+    FALHA_MANUAL: "Falha manual",
+    RESULTADO_INDETERMINADO: "Resultado indeterminado",
+  };
+  return status ? map[status] ?? status : "n/d";
+}
+
+function getFriendlyStepName(stepKey: string) {
+  const map: Record<string, string> = {
+    CHANGE_LIMIT: "Alteração de limite",
+    EVA_RELEASE: "Liberação EVA",
+    AUTHENTICATE: "Autenticação Ticket Log",
+    OPEN_VEHICLE_LIST: "Abrir veículos",
+    SEARCH_PLATE: "Buscar placa",
+    OPEN_PLATE: "Abrir veículo",
+    READ_STATUS: "Verificar status",
+    UNBLOCK_VEHICLE: "Desbloquear veículo",
+    READ_CURRENT_LIMIT: "Ler limite atual",
+  };
+  return map[stepKey] ?? stepKey;
+}
+
+function getFriendlyStepStatus(status: string) {
+  const map: Record<string, string> = {
+    DONE: "Concluído",
+    FAILED: "Falhou",
+    RUNNING: "Executando",
+    PENDING: "Pendente",
+    SKIPPED: "Ignorado",
+  };
+  return map[status] ?? getFriendlyStatus(status);
+}
+
+function getFriendlyPlatformResult(result: string | undefined | null) {
+  const map: Record<string, string> = {
+    ALTERACAO_CONFIRMADA_PELA_TELA_DE_RESULTADO: "Alteração confirmada pela Ticket Log",
+    ALTERACAO_CONFIRMADA_POR_LEITURA_DO_LIMITE: "Alteração confirmada pela leitura do limite",
+    LIMIT_VERIFIED_AFTER_MANUAL_CHANGE: "Limite confirmado após intervenção manual",
+  };
+  return result ? map[result] ?? result : "Aguardando";
+}
+
+function getFriendlyErrorCode(errorCode: string | undefined | null) {
+  const map: Record<string, string> = {
+    VISIBLE_LOCATOR_NOT_FOUND: "Elemento esperado não encontrado na tela",
+    CHANGE_LIMIT_CONFIRMATION_NOT_FOUND: "Confirmação da alteração não encontrada",
+    EVA_PANEL_NOT_FOUND: "Painel da EVA não encontrado",
+    HOME_ENTRYPOINT_NOT_FOUND: "Atalho da tela inicial não encontrado",
+    TICKETLOG_SESSION_NOT_AUTHENTICATED: "Sessão Ticket Log não autenticada",
+    EVA_URL_REJECTED: "EVA rejeitou a sessão atual",
+  };
+  return errorCode ? map[errorCode] ?? errorCode : "sem erro";
+}
+
+function getFriendlyChannel(channel: string | undefined | null) {
+  const map: Record<string, string> = {
+    whatsapp: "WhatsApp",
+    web: "Portal web",
+  };
+  return channel ? map[channel] ?? channel : "n/d";
+}
+
+function getFriendlyVehicleGroup(group: string | undefined | null) {
+  const map: Record<string, string> = {
+    GERAL_DE_RESTRICOES: "Geral de restrições",
+    UTILITARIOS: "Utilitários",
+    VEICULO_DE_PASSEIO: "Veículo de passeio",
+    VAN: "Van",
+    VUC: "VUC",
+  };
+  return group ? map[group] ?? group : "n/d";
 }
 
 function getFriendlyEventName(eventType: string) {
@@ -392,11 +497,14 @@ function getFriendlyEventName(eventType: string) {
     REQUEST_STATE_CHANGED: "Status alterado",
     AUTOMATION_RETRY_EXHAUSTED: "Tentativas de automacao esgotadas",
     AUTOMATION_RETRY_SCHEDULED: "Nova tentativa agendada",
+    AUTOMATION_COMPLETED: "Automação concluída",
     OPERATION_TAKEOVER_CLAIMED: "Assumido manualmente",
     REQUEST_REENQUEUED: "Solicitacao reenfileirada",
     APPROVAL_LINK_REISSUED: "Link de aprovacao reemitido",
     REQUEST_CREATED_OR_REUSED: "Solicitacao criada",
     REQUEST_APPROVAL_RECORDED: "Aprovacao registrada",
+    WHATSAPP_REQUEST_CREATED: "Solicitação criada pelo WhatsApp",
+    JOB_IGNORED_INVALID_STATE: "Job ignorado por status inválido",
   };
   return map[eventType] ?? eventType;
 }
@@ -546,10 +654,10 @@ function ApprovalView({ token, onAuthNeeded }: { token: string; onAuthNeeded: ()
         {request && (
           <dl className="summary">
             <dt>Placa</dt><dd>{request.vehiclePlate}</dd>
-            <dt>Grupo</dt><dd>{request.vehicleGroup}</dd>
+            <dt>Grupo</dt><dd>{getFriendlyVehicleGroup(request.vehicleGroup)}</dd>
             <dt>Valor adicional</dt><dd>{money(request.requestedAmount)}</dd>
             <dt>Solicitante</dt><dd>{request.requesterName}</dd>
-            <dt>Status</dt><dd>{request.status}</dd>
+            <dt>Status</dt><dd>{getFriendlyStatus(request.status)}</dd>
             <dt>Expira em</dt><dd>{appDateTime(request.tokenExpiresAt)}</dd>
           </dl>
         )}
@@ -649,7 +757,7 @@ function RequestPanel({
           <strong>Solicitacao criada</strong>
           <span>Protocolo: {shortProtocol(created.request.id)}</span>
           <span className="muted-line">ID interno: {created.request.id}</span>
-          <span>Status: {created.request.status}</span>
+          <span>Status: {getFriendlyStatus(created.request.status)}</span>
           <a href={created.approvalUrl}>Abrir link de aprovacao</a>
         </div>
       )}
@@ -801,11 +909,11 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
             <span className={`status-pill ${statusTone(visualStatus)}`}>{visualStatus}</span>
           </div>
           <div className="detail-grid">
-            <span>Grupo: {request.vehicle_group}</span>
-            <span>Canal: {request.channel}{request.requester_phone ? ` (${maskPhone(request.requester_phone)})` : ""}</span>
+            <span>Grupo: {getFriendlyVehicleGroup(request.vehicle_group)}</span>
+            <span>Canal: {getFriendlyChannel(request.channel)}{request.requester_phone ? ` (${maskPhone(request.requester_phone)})` : ""}</span>
             <span>Limite anterior: {request.previous_limit ? money(request.previous_limit) : "n/d"}</span>
             <span>Novo limite: {request.new_limit ? money(request.new_limit) : "n/d"}</span>
-            <span>Resultado plataforma: {request.platform_result ?? "aguardando"}</span>
+            <span>Resultado plataforma: {getFriendlyPlatformResult(request.platform_result)}</span>
             <span>Criado em: {appDateTime(request.created_at)}</span>
           </div>
           <div className="action-row">
@@ -854,10 +962,10 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
               <h3>Etapas da automacao</h3>
               <div className="timeline-list">
                 {steps.map((step: any) => (
-                  <div key={step.step_key} className="timeline-row">
-                    <strong>{step.step_key}</strong>
-                    <span className={`status-pill ${statusTone(step.status)}`}>{step.status}</span>
-                    <span>{step.error_code ?? "sem erro"}</span>
+                  <div key={step.step_key} className="timeline-row step-row">
+                    <strong>{getFriendlyStepName(step.step_key)}</strong>
+                    <span className={`status-pill ${statusTone(step.status)}`}>{getFriendlyStepStatus(step.status)}</span>
+                    <span>{getFriendlyErrorCode(step.error_code)}</span>
                   </div>
                 ))}
               </div>
@@ -869,7 +977,7 @@ function StatusPanel({ initialLookupId = "", user }: { initialLookupId?: string;
               <h3>Auditoria recente</h3>
               <div className="timeline-list">
                 {events.map((event: any, index: number) => (
-                  <div key={`${event.event_type}-${index}`} className="timeline-row">
+                  <div key={`${event.event_type}-${index}`} className="timeline-row audit-row">
                     <strong>{getFriendlyEventName(event.event_type)}</strong>
                     <span>{appDateTime(event.created_at)}</span>
                   </div>
@@ -923,7 +1031,7 @@ function HistoryPanel({ onSelectRequest }: { onSelectRequest: (requestId: string
                 <span className={`status-pill ${statusTone(displayRequestStatus(request))}`}>{displayRequestStatus(request)}</span>
               </div>
               <span className="muted-line">Protocolo: {shortProtocol(request.id)}</span>
-              <span>{request.vehicle_group}</span>
+              <span>{getFriendlyVehicleGroup(request.vehicle_group)}</span>
             </div>
           </button>
         ))}
