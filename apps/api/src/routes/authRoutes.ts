@@ -8,7 +8,9 @@ import {
   getUserContext,
   listUsers,
   revokeAuthSession,
+  resetUserMfa,
   setUserMfaSecret,
+  updateUserAdmin,
   upsertUser,
 } from "@ticketlog/db";
 import { config } from "../config.js";
@@ -176,5 +178,53 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const context = await getUserContext(user.id);
     if (!context) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     return { user: publicUser(context) };
+  });
+
+  app.patch("/admin/users/:userId", async (request, reply) => {
+    const authUser = await getAuthenticatedUser(request);
+    const requester = await getUserContext(authUser.id);
+    if (!requester) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanManageUsers(requester);
+
+    const params = request.params as { userId: string };
+    const body = request.body as {
+      name?: string;
+      employeeNumber?: string;
+      corporateEmail?: string;
+      operationScope?: string;
+      phoneE164?: string;
+      password?: string;
+      roles?: string[];
+    };
+
+    if (!body.name || !body.employeeNumber || !body.corporateEmail) {
+      return reply.code(400).send({ error: "MISSING_REQUIRED_USER_FIELDS" });
+    }
+
+    const user = await updateUserAdmin({
+      userId: params.userId,
+      name: body.name,
+      employeeNumber: body.employeeNumber,
+      corporateEmail: body.corporateEmail,
+      operationScope: body.operationScope,
+      phoneE164: body.phoneE164,
+      passwordHash: body.password ? await hashPassword(body.password) : undefined,
+      roles: body.roles,
+    });
+
+    const context = await getUserContext(user.id);
+    if (!context) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    return { user: publicUser(context) };
+  });
+
+  app.post("/admin/users/:userId/reset-mfa", async (request) => {
+    const authUser = await getAuthenticatedUser(request);
+    const requester = await getUserContext(authUser.id);
+    if (!requester) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanManageUsers(requester);
+
+    const params = request.params as { userId: string };
+    await resetUserMfa(params.userId);
+    return { ok: true };
   });
 }

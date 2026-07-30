@@ -337,7 +337,22 @@ export async function findUserById(userId: string): Promise<DbUser | null> {
 
 export async function listUsers(): Promise<DbUser[]> {
   const result = await getPool().query<DbUser>(
-    "select id, name, employee_number, corporate_email, cpf_last4, operation_scope, status, mfa_enabled from users order by name",
+    `select u.id,
+            u.name,
+            u.employee_number,
+            u.corporate_email,
+            u.cpf_last4,
+            u.operation_scope,
+            u.status,
+            u.mfa_enabled,
+            p.phone_e164,
+            coalesce(array_agg(r.name order by r.name) filter (where r.name is not null), '{}') as roles
+       from users u
+       left join authorized_phones p on p.user_id = u.id and p.revoked_at is null
+       left join user_roles ur on ur.user_id = u.id
+       left join roles r on r.id = ur.role_id
+      group by u.id, p.phone_e164
+      order by u.name`,
   );
   return result.rows;
 }
@@ -439,6 +454,110 @@ export async function upsertUser(input: {
   } finally {
     client.release();
   }
+}
+
+export async function updateUserAdmin(input: {
+  userId: string;
+  name: string;
+  employeeNumber: string;
+  corporateEmail: string;
+  operationScope?: string;
+  phoneE164?: string;
+  passwordHash?: string;
+  roles?: string[];
+}): Promise<DbUser> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const user = await client.query<DbUser>(
+      `update users
+          set name = $2,
+              employee_number = $3,
+              corporate_email = lower($4),
+              operation_scope = $5,
+              password_hash = coalesce($6, password_hash),
+              password_changed_at = case when $6 is null then password_changed_at else now() end
+        where id = $1
+        returning *`,
+      [
+        input.userId,
+        input.name,
+        input.employeeNumber,
+        input.corporateEmail,
+        input.operationScope ?? "GERAL",
+        input.passwordHash ?? null,
+      ],
+    );
+    if (user.rowCount === 0) {
+      throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    }
+
+    await client.query("update authorized_phones set revoked_at = now() where user_id = $1 and revoked_at is null", [
+      input.userId,
+    ]);
+    if (input.phoneE164) {
+      await client.query(
+        `insert into authorized_phones(user_id, phone_e164, verified_at)
+         values ($1, $2, now())
+         on conflict (phone_e164)
+         do update set user_id = excluded.user_id, verified_at = now(), revoked_at = null`,
+        [input.userId, input.phoneE164],
+      );
+    }
+
+    if (input.roles) {
+      await client.query("delete from user_roles where user_id = $1", [input.userId]);
+      for (const role of input.roles) {
+        await client.query(
+          `insert into user_roles(user_id, role_id)
+           select $1, id from roles where name = $2
+           on conflict do nothing`,
+          [input.userId, role],
+        );
+      }
+    }
+
+    await client.query("commit");
+    return user.rows[0];
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function resetUserMfa(userId: string): Promise<void> {
+  await getPool().query(
+    `with target as (
+       update users
+          set mfa_secret_encrypted = null,
+              mfa_enabled = false,
+              mfa_enrolled_at = null
+        where id = $1
+        returning id
+     )
+     update auth_sessions
+        set revoked_at = now()
+      where user_id in (select id from target)
+        and revoked_at is null`,
+    [userId],
+  );
+  await getPool().query(
+    `update whatsapp_sessions
+        set state = 'AGUARDANDO_CPF',
+            authenticated_user_id = null,
+            authenticated_at = null,
+            active_request_id = null,
+            pending_vehicle_plate = null,
+            pending_amount_cents = null,
+            failed_mfa_attempts = 0,
+            authentication_attempts = 0,
+            locked_until = null,
+            expires_at = now()
+      where authenticated_user_id = $1`,
+    [userId],
+  );
 }
 
 export async function setUserMfaSecret(userId: string, encryptedSecret: Buffer): Promise<void> {

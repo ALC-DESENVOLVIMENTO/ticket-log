@@ -227,3 +227,26 @@ export async function createUser(input: {
     body: JSON.stringify(input),
   });
 }
+
+export async function updateUser(userId: string, input: {
+  name: string;
+  employeeNumber: string;
+  corporateEmail: string;
+  operationScope?: string;
+  phoneE164?: string;
+  password?: string;
+  roles: string[];
+}) {
+  return jsonFetch(`/admin/users/${userId}`, {
+    method: "PATCH",
+    headers: devHeaders(),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function resetUserMfa(userId: string) {
+  return jsonFetch(`/admin/users/${userId}/reset-mfa`, {
+    method: "POST",
+    headers: devHeaders(),
+  });
+}

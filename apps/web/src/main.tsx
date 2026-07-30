@@ -32,12 +32,14 @@ import {
   login,
   rejectRequest,
   reopenWhatsappSession,
+  resetUserMfa as resetUserMfaApi,
   logout,
   retryRequest,
   releaseTicketLogOperation,
   secondApprove,
   setSessionToken,
   setupMfa,
+  updateUser,
   verifyMfa,
 } from "./api";
 import "./styles.css";
@@ -1342,6 +1344,7 @@ function OperationsPanel({ user }: { user: any }) {
 
 function UsersPanel() {
   const [users, setUsers] = useState<any[]>([]);
+  const [editingUsers, setEditingUsers] = useState<Record<string, any>>({});
   const [form, setForm] = useState({
     name: "",
     employeeNumber: "",
@@ -1353,10 +1356,27 @@ function UsersPanel() {
     roles: ["SUPERVISOR"],
   });
   const [error, setError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
 
   async function refresh() {
     const result = await listUsers();
     setUsers(result.users);
+    setEditingUsers(
+      Object.fromEntries(
+        (result.users ?? []).map((user: any) => [
+          user.id,
+          {
+            name: user.name ?? "",
+            employeeNumber: user.employee_number ?? "",
+            corporateEmail: user.corporate_email ?? "",
+            operationScope: user.operation_scope ?? "GERAL",
+            phoneE164: user.phone_e164 ?? "",
+            password: "",
+            roles: Array.isArray(user.roles) ? user.roles.join(", ") : "",
+          },
+        ]),
+      ),
+    );
   }
 
   useEffect(() => {
@@ -1372,6 +1392,52 @@ function UsersPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "USER_CREATE_FAILED");
     }
+  }
+
+  async function saveUser(userId: string) {
+    setError("");
+    setStatusMessage("");
+    const draft = editingUsers[userId];
+    try {
+      await updateUser(userId, {
+        name: draft.name,
+        employeeNumber: draft.employeeNumber,
+        corporateEmail: draft.corporateEmail,
+        operationScope: draft.operationScope,
+        phoneE164: draft.phoneE164,
+        password: draft.password || undefined,
+        roles: String(draft.roles ?? "")
+          .split(",")
+          .map((role) => role.trim().toUpperCase())
+          .filter(Boolean),
+      });
+      setStatusMessage("Usuario atualizado.");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "USER_UPDATE_FAILED");
+    }
+  }
+
+  async function resetMfa(userId: string) {
+    setError("");
+    setStatusMessage("");
+    try {
+      await resetUserMfaApi(userId);
+      setStatusMessage("MFA resetado. O usuario deve configurar o Google Authenticator no proximo login.");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "USER_MFA_RESET_FAILED");
+    }
+  }
+
+  function updateDraft(userId: string, patch: Record<string, string>) {
+    setEditingUsers((current) => ({
+      ...current,
+      [userId]: {
+        ...(current[userId] ?? {}),
+        ...patch,
+      },
+    }));
   }
 
   return (
@@ -1390,22 +1456,49 @@ function UsersPanel() {
         <label>Senha inicial<input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
         <button><UserPlus size={18} /> Criar usuario</button>
         <ErrorBox error={error} />
+        {statusMessage && <p className="status-message">{statusMessage}</p>}
       </form>
       <section className="panel">
         <div className="panel-title">
           <h2>Usuarios</h2>
-          <span>Permissoes</span>
+          <span>Cadastro e MFA</span>
         </div>
         <div className="table">
-          {users.map((user) => (
-            <div className="row" key={user.id}>
-              <strong>{user.name}</strong>
-              <span>{user.corporate_email}</span>
-              <span>CPF: {user.cpf_last4 ? `***.***.***-${user.cpf_last4.slice(-2)}` : "pendente"}</span>
-              <span>Escopo: {user.operation_scope ?? "GERAL"}</span>
-              <span>MFA: {user.mfa_enabled ? "ativo" : "pendente"}</span>
+          {users.map((user) => {
+            const draft = editingUsers[user.id] ?? {};
+            return (
+            <div className="row user-edit-card" key={user.id}>
+              <div className="detail-headline">
+                <div>
+                  <strong>{user.name}</strong>
+                  <span className="muted-line">{user.corporate_email}</span>
+                  <span className="muted-line">CPF: {user.cpf_last4 ? `***.***.***-${user.cpf_last4.slice(-2)}` : "pendente"}</span>
+                </div>
+                <span className={`status-pill ${user.mfa_enabled ? "success" : "warning"}`}>
+                  MFA {user.mfa_enabled ? "ativo" : "pendente"}
+                </span>
+              </div>
+              <div className="user-edit-grid">
+                <label>Nome<input value={draft.name ?? ""} onChange={(e) => updateDraft(user.id, { name: e.target.value })} /></label>
+                <label>Matricula<input value={draft.employeeNumber ?? ""} onChange={(e) => updateDraft(user.id, { employeeNumber: e.target.value })} /></label>
+                <label>E-mail<input value={draft.corporateEmail ?? ""} onChange={(e) => updateDraft(user.id, { corporateEmail: e.target.value })} /></label>
+                <label>Escopo<input value={draft.operationScope ?? ""} onChange={(e) => updateDraft(user.id, { operationScope: e.target.value })} /></label>
+                <label>WhatsApp E.164<input value={draft.phoneE164 ?? ""} onChange={(e) => updateDraft(user.id, { phoneE164: e.target.value })} /></label>
+                <label>Roles<input value={draft.roles ?? ""} onChange={(e) => updateDraft(user.id, { roles: e.target.value })} placeholder="SOLICITANTE, APROVADOR" /></label>
+                <label>Nova senha<input value={draft.password ?? ""} onChange={(e) => updateDraft(user.id, { password: e.target.value })} placeholder="Deixe vazio para manter" /></label>
+              </div>
+              <div className="action-row">
+                <button type="button" onClick={() => saveUser(user.id)}>
+                  <CheckCircle2 size={18} />
+                  Salvar alteracoes
+                </button>
+                <button type="button" className="secondary" onClick={() => resetMfa(user.id)}>
+                  <RefreshCw size={18} />
+                  Resetar MFA
+                </button>
+              </div>
             </div>
-          ))}
+          )})}
         </div>
       </section>
     </div>

@@ -663,6 +663,17 @@ pre {
   padding: 10px;
 }
 
+.user-edit-card {
+  gap: 14px;
+  padding: 14px;
+}
+
+.user-edit-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .userline {
   color: var(--muted);
   margin-bottom: 18px;
@@ -788,6 +799,7 @@ pre {
 
   .detail-grid,
   .timeline-row,
+  .user-edit-grid,
   .operations-layout {
     grid-template-columns: 1fr;
   }
