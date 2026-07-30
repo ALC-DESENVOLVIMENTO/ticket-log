@@ -13,8 +13,8 @@ export interface AccessProfile {
 }
 
 export function resolveAccessProfile(user: Pick<DbUserContext, "roles">): AccessProfile {
-  const roleSet = new Set(user.roles);
-  const isAdmin = roleSet.has("ADMINISTRADOR");
+  const roleSet = new Set<string>(user.roles);
+  const isAdmin = roleSet.has("DEV") || roleSet.has("ADMINISTRADOR");
   const isCoordinator = isAdmin || roleSet.has("COORDENADOR") || roleSet.has("APROVADOR");
   const isSupervisor = isCoordinator || roleSet.has("SUPERVISOR") || roleSet.has("SOLICITANTE");
 

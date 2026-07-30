@@ -668,10 +668,37 @@ pre {
   padding: 14px;
 }
 
+.user-summary-grid {
+  background: #f7f8fa;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 12px;
+}
+
+.user-summary-grid span {
+  color: #2d333a;
+  display: grid;
+  font-size: 13px;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.user-summary-grid strong {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
 .user-edit-grid {
+  border-top: 1px solid var(--line);
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-top: 14px;
 }
 
 .userline {
@@ -799,6 +826,7 @@ pre {
 
   .detail-grid,
   .timeline-row,
+  .user-summary-grid,
   .user-edit-grid,
   .operations-layout {
     grid-template-columns: 1fr;

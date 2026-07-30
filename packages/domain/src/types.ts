@@ -3,6 +3,7 @@ export type RequestChannel = "whatsapp" | "web" | "admin";
 export type UserStatus = "active" | "disabled";
 
 export type RoleKey =
+  | "DEV"
   | "SUPERVISOR"
   | "COORDENADOR"
   | "SOLICITANTE"

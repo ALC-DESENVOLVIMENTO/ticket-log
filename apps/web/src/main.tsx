@@ -1342,9 +1342,22 @@ function OperationsPanel({ user }: { user: any }) {
   );
 }
 
+const userRoleOptions = ["DEV", "ADMINISTRADOR", "SUPERVISOR", "COORDENADOR"];
+
+function primaryUserRole(roles: unknown) {
+  const list = Array.isArray(roles) ? roles.map((role) => String(role).toUpperCase()) : [];
+  return userRoleOptions.find((role) => list.includes(role)) ?? "SUPERVISOR";
+}
+
+function displayUserRoles(roles: unknown) {
+  const list = Array.isArray(roles) ? roles.map((role) => String(role).toUpperCase()) : [];
+  return list.length ? list.join(", ") : "Sem perfil";
+}
+
 function UsersPanel() {
   const [users, setUsers] = useState<any[]>([]);
   const [editingUsers, setEditingUsers] = useState<Record<string, any>>({});
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
     employeeNumber: "",
@@ -1372,7 +1385,7 @@ function UsersPanel() {
             operationScope: user.operation_scope ?? "GERAL",
             phoneE164: user.phone_e164 ?? "",
             password: "",
-            roles: Array.isArray(user.roles) ? user.roles.join(", ") : "",
+            role: primaryUserRole(user.roles),
           },
         ]),
       ),
@@ -1387,7 +1400,7 @@ function UsersPanel() {
     event.preventDefault();
     setError("");
     try {
-      await createUser(form);
+      await createUser({ ...form, roles: [primaryUserRole(form.roles)] });
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "USER_CREATE_FAILED");
@@ -1406,12 +1419,10 @@ function UsersPanel() {
         operationScope: draft.operationScope,
         phoneE164: draft.phoneE164,
         password: draft.password || undefined,
-        roles: String(draft.roles ?? "")
-          .split(",")
-          .map((role) => role.trim().toUpperCase())
-          .filter(Boolean),
+        roles: [primaryUserRole([draft.role])],
       });
       setStatusMessage("Usuario atualizado.");
+      setEditingUserId(null);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "USER_UPDATE_FAILED");
@@ -1440,6 +1451,24 @@ function UsersPanel() {
     }));
   }
 
+  function startEditing(user: any) {
+    setEditingUserId(user.id);
+    updateDraft(user.id, {
+      name: user.name ?? "",
+      employeeNumber: user.employee_number ?? "",
+      corporateEmail: user.corporate_email ?? "",
+      operationScope: user.operation_scope ?? "GERAL",
+      phoneE164: user.phone_e164 ?? "",
+      password: "",
+      role: primaryUserRole(user.roles),
+    });
+  }
+
+  function cancelEditing() {
+    setEditingUserId(null);
+    refresh().catch((err) => setError(err instanceof Error ? err.message : "USERS_LOAD_FAILED"));
+  }
+
   return (
     <div className="grid">
       <form className="panel" onSubmit={submit}>
@@ -1453,6 +1482,17 @@ function UsersPanel() {
         <label>CPF<input value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} placeholder="000.000.000-00" /></label>
         <label>Escopo<input value={form.operationScope} onChange={(e) => setForm({ ...form, operationScope: e.target.value })} placeholder="GERAL" /></label>
         <label>WhatsApp E.164<input value={form.phoneE164} onChange={(e) => setForm({ ...form, phoneE164: e.target.value })} placeholder="+5511999999999" /></label>
+        <label>
+          Perfil
+          <select
+            value={primaryUserRole(form.roles)}
+            onChange={(e) => setForm({ ...form, roles: [e.target.value] })}
+          >
+            {userRoleOptions.map((role) => (
+              <option key={role} value={role}>{role}</option>
+            ))}
+          </select>
+        </label>
         <label>Senha inicial<input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
         <button><UserPlus size={18} /> Criar usuario</button>
         <ErrorBox error={error} />
@@ -1466,6 +1506,7 @@ function UsersPanel() {
         <div className="table">
           {users.map((user) => {
             const draft = editingUsers[user.id] ?? {};
+            const isEditing = editingUserId === user.id;
             return (
             <div className="row user-edit-card" key={user.id}>
               <div className="detail-headline">
@@ -1478,20 +1519,46 @@ function UsersPanel() {
                   MFA {user.mfa_enabled ? "ativo" : "pendente"}
                 </span>
               </div>
-              <div className="user-edit-grid">
-                <label>Nome<input value={draft.name ?? ""} onChange={(e) => updateDraft(user.id, { name: e.target.value })} /></label>
-                <label>Matricula<input value={draft.employeeNumber ?? ""} onChange={(e) => updateDraft(user.id, { employeeNumber: e.target.value })} /></label>
-                <label>E-mail<input value={draft.corporateEmail ?? ""} onChange={(e) => updateDraft(user.id, { corporateEmail: e.target.value })} /></label>
-                <label>Escopo<input value={draft.operationScope ?? ""} onChange={(e) => updateDraft(user.id, { operationScope: e.target.value })} /></label>
-                <label>WhatsApp E.164<input value={draft.phoneE164 ?? ""} onChange={(e) => updateDraft(user.id, { phoneE164: e.target.value })} /></label>
-                <label>Roles<input value={draft.roles ?? ""} onChange={(e) => updateDraft(user.id, { roles: e.target.value })} placeholder="SOLICITANTE, APROVADOR" /></label>
-                <label>Nova senha<input value={draft.password ?? ""} onChange={(e) => updateDraft(user.id, { password: e.target.value })} placeholder="Deixe vazio para manter" /></label>
+              <div className="user-summary-grid">
+                <span><strong>Matricula</strong>{user.employee_number ?? "n/d"}</span>
+                <span><strong>Escopo</strong>{user.operation_scope ?? "GERAL"}</span>
+                <span><strong>WhatsApp</strong>{user.phone_e164 ?? "nao vinculado"}</span>
+                <span><strong>Perfil</strong>{displayUserRoles(user.roles)}</span>
               </div>
+              {isEditing && (
+                <div className="user-edit-grid">
+                  <label>Nome<input value={draft.name ?? ""} onChange={(e) => updateDraft(user.id, { name: e.target.value })} /></label>
+                  <label>Matricula<input value={draft.employeeNumber ?? ""} onChange={(e) => updateDraft(user.id, { employeeNumber: e.target.value })} /></label>
+                  <label>E-mail<input value={draft.corporateEmail ?? ""} onChange={(e) => updateDraft(user.id, { corporateEmail: e.target.value })} /></label>
+                  <label>Escopo<input value={draft.operationScope ?? ""} onChange={(e) => updateDraft(user.id, { operationScope: e.target.value })} /></label>
+                  <label>WhatsApp E.164<input value={draft.phoneE164 ?? ""} onChange={(e) => updateDraft(user.id, { phoneE164: e.target.value })} /></label>
+                  <label>
+                    Perfil
+                    <select value={draft.role ?? "SUPERVISOR"} onChange={(e) => updateDraft(user.id, { role: e.target.value })}>
+                      {userRoleOptions.map((role) => (
+                        <option key={role} value={role}>{role}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Nova senha<input value={draft.password ?? ""} onChange={(e) => updateDraft(user.id, { password: e.target.value })} placeholder="Deixe vazio para manter" /></label>
+                </div>
+              )}
               <div className="action-row">
-                <button type="button" onClick={() => saveUser(user.id)}>
-                  <CheckCircle2 size={18} />
-                  Salvar alteracoes
-                </button>
+                {isEditing ? (
+                  <>
+                    <button type="button" onClick={() => saveUser(user.id)}>
+                      <CheckCircle2 size={18} />
+                      Salvar alteracoes
+                    </button>
+                    <button type="button" className="secondary" onClick={cancelEditing}>
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => startEditing(user)}>
+                    Editar
+                  </button>
+                )}
                 <button type="button" className="secondary" onClick={() => resetMfa(user.id)}>
                   <RefreshCw size={18} />
                   Resetar MFA

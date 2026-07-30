@@ -329,7 +329,7 @@ create index if not exists idx_audit_request_created on audit_events(request_id,
 create unique index if not exists uq_whatsapp_provider_msg on whatsapp_messages(provider_message_id);
 create unique index if not exists uq_active_limit_policy_scope on limit_policies(scope_type) where active is true;
 
-insert into roles(name) values ('SUPERVISOR'), ('COORDENADOR'), ('SOLICITANTE'), ('APROVADOR'), ('ADMINISTRADOR')
+insert into roles(name) values ('DEV'), ('SUPERVISOR'), ('COORDENADOR'), ('SOLICITANTE'), ('APROVADOR'), ('ADMINISTRADOR')
 on conflict (name) do nothing;
 
 insert into permissions(key) values

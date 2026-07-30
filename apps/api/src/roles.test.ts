@@ -24,3 +24,10 @@ test("resolveAccessProfile gives admin full access", () => {
   assert.equal(result.canApproveRequests, true);
   assert.equal(result.canManageUsers, true);
 });
+
+test("resolveAccessProfile gives dev full access", () => {
+  const result = resolveAccessProfile({ roles: ["DEV"] as any });
+  assert.equal(result.canCreateWebRequest, true);
+  assert.equal(result.canApproveRequests, true);
+  assert.equal(result.canManageUsers, true);
+});

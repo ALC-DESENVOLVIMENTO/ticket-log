@@ -438,6 +438,7 @@ export async function upsertUser(input: {
     }
 
     for (const role of input.roles ?? ["SUPERVISOR"]) {
+      await client.query("insert into roles(name) values ($1) on conflict (name) do nothing", [role]);
       await client.query(
         `insert into user_roles(user_id, role_id)
          select $1, id from roles where name = $2
@@ -508,6 +509,7 @@ export async function updateUserAdmin(input: {
     if (input.roles) {
       await client.query("delete from user_roles where user_id = $1", [input.userId]);
       for (const role of input.roles) {
+        await client.query("insert into roles(name) values ($1) on conflict (name) do nothing", [role]);
         await client.query(
           `insert into user_roles(user_id, role_id)
            select $1, id from roles where name = $2
@@ -1246,7 +1248,7 @@ export async function listCoordinatorsByScope(operationScope: string, excludeUse
        join roles r on r.id = ur.role_id
       where u.status = 'active'
         and u.operation_scope = $1
-        and r.name in ('COORDENADOR', 'APROVADOR', 'ADMINISTRADOR')
+        and r.name in ('DEV', 'COORDENADOR', 'APROVADOR', 'ADMINISTRADOR')
         and ($2::uuid is null or u.id <> $2::uuid)
       order by u.name`,
     [operationScope, excludeUserId ?? null],

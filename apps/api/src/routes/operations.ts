@@ -24,7 +24,7 @@ function operatorStationUrl(baseUrl: string | null): string | null {
 async function requireOperator(request: Parameters<typeof getAuthenticatedUser>[0], reply: FastifyReply) {
   const user = await getAuthenticatedUser(request);
   const roles = await listUserRoles(user.id);
-  if (!roles.some((role) => role === "APROVADOR" || role === "ADMINISTRADOR")) {
+  if (!roles.some((role) => role === "DEV" || role === "APROVADOR" || role === "ADMINISTRADOR")) {
     await appendAuditEvent({
       actorUserId: user.id,
       eventType: "OPERATION_ACCESS_DENIED",
