@@ -481,6 +481,39 @@ function getFriendlyChannel(channel: string | undefined | null) {
   return channel ? map[channel] ?? channel : "n/d";
 }
 
+function getFriendlyProviderMode(providerMode: string | undefined | null) {
+  const map: Record<string, string> = {
+    browser: "Navegador",
+    api: "API oficial",
+    simulation: "Simulação",
+  };
+  return providerMode ? map[providerMode] ?? providerMode : "n/d";
+}
+
+function getFriendlySessionStatus(status: string | undefined | null) {
+  const map: Record<string, string> = {
+    STATION_READY: "Estação pronta",
+    STATION_FAILED: "Falha na estação",
+    AUTH_REQUIRED: "Login necessário",
+    AUTHENTICATED: "Autenticada",
+    ERROR: "Erro",
+    UNKNOWN: "Desconhecida",
+  };
+  return status ? map[status] ?? getFriendlyStatus(status) : "n/d";
+}
+
+function getFriendlyWorkerStatus(status: string | undefined | null) {
+  const map: Record<string, string> = {
+    IDLE: "Ocioso",
+    OFFLINE: "Offline",
+    WAITING_OPERATOR: "Aguardando operador",
+    DEGRADED: "Instável",
+    STOPPING: "Encerrando",
+    RUNNING: "Executando",
+  };
+  return status ? map[status] ?? getFriendlyStatus(status) : "Carregando";
+}
+
 function getFriendlyVehicleGroup(group: string | undefined | null) {
   const map: Record<string, string> = {
     GERAL_DE_RESTRICOES: "Geral de restrições",
@@ -1135,21 +1168,21 @@ function OperationsPanel({ user }: { user: any }) {
         <div className="panel-title">
           <h2>Estacao operacional Ticket Log</h2>
           <span className={`status-pill ${session?.workerStatus === "OFFLINE" ? "danger" : session?.workerStatus === "WAITING_OPERATOR" ? "warning" : "success"}`}>
-            {session?.workerStatus ?? "CARREGANDO"}
+            {getFriendlyWorkerStatus(session?.workerStatus)}
           </span>
         </div>
         {session && (
           <div className="result detail-card">
             <div className="detail-grid">
-              <span>Provider: {session.providerMode}</span>
+              <span>Provider: {getFriendlyProviderMode(session.providerMode)}</span>
               <span>Execucao real: {session.realExecutionEnabled ? "ativa" : "desligada"}</span>
-              <span>Sessao: {session.sessionStatus}</span>
+              <span>Sessao: {getFriendlySessionStatus(session.sessionStatus)}</span>
               <span>Heartbeat: {heartbeat}</span>
               <span>Perfil persistente: {session.userDataDirPresent ? "presente" : "nao detectado"}</span>
               <span>Storage state: {session.storageStatePresent ? "presente" : "nao detectado"}</span>
               <span>Solicitacao: {session.currentRequestId ?? "nenhuma"}</span>
-              <span>Status da solicitacao: {session.currentRequestStatus ?? "n/d"}</span>
-              <span>Etapa: {session.currentStep ?? "ocioso"}</span>
+              <span>Status da solicitacao: {getFriendlyStatus(session.currentRequestStatus)}</span>
+              <span>Etapa: {session.currentStep ? getFriendlyStepName(session.currentStep) : "Ocioso"}</span>
             </div>
             <div className={session.workerStatus === "WAITING_OPERATOR" ? "warning-box" : "hint"}>
               <strong>{session.statusMessage ?? session.message ?? "Aguardando atividade"}</strong>
