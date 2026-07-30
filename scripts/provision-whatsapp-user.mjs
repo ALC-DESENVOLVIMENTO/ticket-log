@@ -106,12 +106,15 @@ async function main() {
     .map((item) => item.trim().toUpperCase())
     .filter(Boolean);
   const companyName = process.env.COMPANY_NAME ?? "ALC & Pereira Filho Transportes";
-  const mfaSecret = args.mfaSecret ?? generateSecret();
-  const otpauthUrl = generateURI({
-    issuer: companyName,
-    label: email,
-    secret: mfaSecret,
-  });
+  const shouldPreEnrollMfa = Boolean(args.mfaSecret);
+  const mfaSecret = shouldPreEnrollMfa ? args.mfaSecret : null;
+  const otpauthUrl = mfaSecret
+    ? generateURI({
+        issuer: companyName,
+        label: email,
+        secret: mfaSecret,
+      })
+    : null;
 
   const client = buildPgClient();
   await client.connect();
@@ -130,11 +133,8 @@ async function main() {
          operation_scope,
          password_hash,
          password_changed_at,
-         mfa_secret_encrypted,
-         mfa_enabled,
-         mfa_enrolled_at,
          status
-       ) values ($1,$2,$3,$4,$5,$6,$7,now(),$8,true,now(),'active')
+       ) values ($1,$2,$3,$4,$5,$6,$7,now(),'active')
        on conflict (corporate_email)
        do update set
          name = excluded.name,
@@ -144,9 +144,6 @@ async function main() {
          operation_scope = excluded.operation_scope,
          password_hash = excluded.password_hash,
          password_changed_at = now(),
-         mfa_secret_encrypted = excluded.mfa_secret_encrypted,
-         mfa_enabled = true,
-         mfa_enrolled_at = now(),
          status = 'active'
        returning id, name, employee_number, corporate_email`,
       [
@@ -157,9 +154,19 @@ async function main() {
         cpf.slice(-4),
         operationScope,
         hashPassword(password),
-        encryptText(mfaSecret),
       ],
     );
+
+    if (shouldPreEnrollMfa && mfaSecret) {
+      await client.query(
+        `update users
+            set mfa_secret_encrypted = $2,
+                mfa_enabled = true,
+                mfa_enrolled_at = now()
+          where id = $1`,
+        [userResult.rows[0].id, encryptText(mfaSecret)],
+      );
+    }
 
     const user = userResult.rows[0];
 
@@ -201,8 +208,12 @@ async function main() {
         password,
       },
       mfa: {
+        enabled: shouldPreEnrollMfa,
         secret: mfaSecret,
         otpauthUrl,
+        setupNote: shouldPreEnrollMfa
+          ? "MFA pre-cadastrado pelo parametro --mfaSecret."
+          : "MFA nao foi ativado por este script. Entre no painel web e configure o Google Authenticator.",
       },
     };
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");

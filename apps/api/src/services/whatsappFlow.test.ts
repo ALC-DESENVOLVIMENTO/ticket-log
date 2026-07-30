@@ -179,6 +179,81 @@ test("valid MFA authenticates and requests plate and amount", async () => {
   assert.match(sentMessages[0].body, /placa e o valor/i);
 });
 
+test("MFA step does not authenticate when user has no MFA configured", async () => {
+  let updatedState = "";
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AGUARDANDO_MFA",
+        authenticated_user_id: "user-1",
+        cpf_last4: "9806",
+      }),
+    getUserContext: async () =>
+      ({
+        id: "user-1",
+        name: "Wesley Oliveira",
+        employee_number: "ALC-WO-20260729-001",
+        corporate_email: "wesley.oliveira@alcepereirafilho.com.br",
+        operation_scope: "GERAL",
+        status: "active",
+        roles: ["SOLICITANTE"],
+        mfa_enabled: false,
+        mfa_secret_encrypted: null,
+      }) as any,
+    upsertWhatsappSession: async (input: any) => {
+      updatedState = input.state;
+      return buildSession({ state: input.state });
+    },
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-mfa-not-configured",
+    phoneE164: "+5516992999312",
+    text: "123456",
+  });
+
+  assert.equal(updatedState, "AGUARDANDO_CPF");
+  assert.match(sentMessages[0].body, /Nao foi possivel validar/i);
+});
+
+test("MFA step rejects 123456 when the TOTP verifier rejects it", async () => {
+  let updatedState = "";
+  const { service, sentMessages } = createService({
+    getWhatsappSessionByPhone: async () =>
+      buildSession({
+        state: "AGUARDANDO_MFA",
+        authenticated_user_id: "user-1",
+        cpf_last4: "9806",
+      }),
+    getUserContext: async () =>
+      ({
+        id: "user-1",
+        name: "Wesley Oliveira",
+        employee_number: "ALC-WO-20260729-001",
+        corporate_email: "wesley.oliveira@alcepereirafilho.com.br",
+        operation_scope: "GERAL",
+        status: "active",
+        roles: ["SOLICITANTE"],
+        mfa_enabled: true,
+        mfa_secret_encrypted: Buffer.from("encrypted"),
+      }) as any,
+    verifyTotpCode: () => false,
+    upsertWhatsappSession: async (input: any) => {
+      updatedState = input.state;
+      return buildSession({ state: input.state });
+    },
+  });
+
+  await service.handleInboundMessage({
+    providerMessageId: "msg-mfa-invalid",
+    phoneE164: "+5516992999312",
+    text: "123456",
+  });
+
+  assert.equal(updatedState, "AGUARDANDO_MFA");
+  assert.match(sentMessages[0].body, /Codigo MFA invalido/i);
+});
+
 test("plate and amount in same message request confirmation", async () => {
   const { service, sentMessages } = createService({
     getWhatsappSessionByPhone: async () =>

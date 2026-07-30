@@ -774,8 +774,15 @@ export class WhatsappFlowService {
     }
 
     const code = text.replace(/\D/g, "");
-    const secret = this.deps.decryptText(user.mfa_secret_encrypted);
-    const valid = this.deps.verifyTotpCode({ token: code, secret });
+    let valid = false;
+    if (code.length === 6) {
+      try {
+        const secret = this.deps.decryptText(user.mfa_secret_encrypted);
+        valid = this.deps.verifyTotpCode({ token: code, secret });
+      } catch {
+        valid = false;
+      }
+    }
     if (!valid) {
       const attempts = session.failed_mfa_attempts + 1;
       const lockedUntil = attempts >= config.whatsappMaxAuthAttempts
