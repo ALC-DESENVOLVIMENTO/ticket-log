@@ -1391,10 +1391,12 @@ function WhatsappMessagesPanel() {
         authenticatedUserName: message.authenticatedUserName,
         messages: [],
         lastAt: message.receivedAt,
+        lastBody: message.body,
       };
       current.messages.push(message);
       if (new Date(message.receivedAt).getTime() > new Date(current.lastAt).getTime()) {
         current.lastAt = message.receivedAt;
+        current.lastBody = message.body;
         current.requestStatus = message.requestStatus ?? current.requestStatus;
         current.vehiclePlate = message.vehiclePlate ?? current.vehiclePlate;
       }
@@ -1414,31 +1416,36 @@ function WhatsappMessagesPanel() {
   return (
     <section className="panel whatsapp-log-panel">
       <div className="panel-title">
-        <h2>Conversas WhatsApp</h2>
+        <div>
+          <h2>Conversas WhatsApp</h2>
+          <span>Visualizacao das mensagens recebidas e enviadas pelo bot</span>
+        </div>
         <span>Somente DEV e administrador</span>
       </div>
-      <div className="filters-bar">
-        <label>
-          Telefone
-          <input value={phoneE164} onChange={(e) => setPhoneE164(e.target.value)} placeholder="+5516992999312" />
-        </label>
-        <label>
-          ID da solicitacao
-          <input value={requestId} onChange={(e) => setRequestId(e.target.value)} placeholder="UUID interno" />
-        </label>
-        <label>
-          Limite
-          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-            <option value={50}>50</option>
-            <option value={150}>150</option>
-            <option value={300}>300</option>
-            <option value={500}>500</option>
-          </select>
-        </label>
-        <button type="button" onClick={refresh} disabled={loading}>
-          <RefreshCw size={18} className={loading ? "spin" : ""} />
-          Atualizar
-        </button>
+      <div className="whatsapp-filter-card">
+        <div className="filters-bar">
+          <label>
+            Telefone
+            <input value={phoneE164} onChange={(e) => setPhoneE164(e.target.value)} placeholder="+5516992999312" />
+          </label>
+          <label>
+            ID da solicitacao
+            <input value={requestId} onChange={(e) => setRequestId(e.target.value)} placeholder="UUID interno" />
+          </label>
+          <label>
+            Limite
+            <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+              <option value={50}>50</option>
+              <option value={150}>150</option>
+              <option value={300}>300</option>
+              <option value={500}>500</option>
+            </select>
+          </label>
+          <button type="button" onClick={refresh} disabled={loading}>
+            <RefreshCw size={18} className={loading ? "spin" : ""} />
+            Atualizar
+          </button>
+        </div>
       </div>
       <ErrorBox error={error} />
       <div className="whatsapp-chat-layout">
@@ -1458,14 +1465,22 @@ function WhatsappMessagesPanel() {
                   className={`whatsapp-conversation ${selectedConversation?.key === conversation.key ? "active" : ""}`}
                   onClick={() => setSelectedConversationKey(conversation.key)}
                 >
-                  <strong>{conversation.phoneE164 ?? "Telefone desconhecido"}</strong>
-                  <span>{conversation.protocol}</span>
+                  <span className="conversation-phone">{conversation.phoneE164 ?? "Telefone desconhecido"}</span>
+                  <span className="conversation-protocol">{conversation.protocol}</span>
                   <small>
                     {[conversation.vehiclePlate, conversation.requestStatus ? getFriendlyStatus(conversation.requestStatus) : null]
                       .filter(Boolean)
                       .join(" · ") || "Sem solicitacao vinculada"}
                   </small>
                   <time>{appDateTime(conversation.lastAt)}</time>
+                  <span className="conversation-preview">{conversation.lastBody || "Mensagem sem texto registrada."}</span>
+                  <span className="conversation-foot">
+                    <small>{conversation.vehiclePlate ?? "Sem placa"}</small>
+                    <time>{appDateTime(conversation.lastAt)}</time>
+                  </span>
+                  {conversation.requestStatus && (
+                    <span className="conversation-status">{getFriendlyStatus(conversation.requestStatus)}</span>
+                  )}
                 </button>
               ))}
             </aside>
@@ -1481,6 +1496,20 @@ function WhatsappMessagesPanel() {
                 {selectedConversation?.requestStatus && (
                   <span className="status-pill neutral">{getFriendlyStatus(selectedConversation.requestStatus)}</span>
                 )}
+              </div>
+              <div className="whatsapp-chat-summary">
+                <span>
+                  <strong>Protocolo</strong>
+                  {selectedConversation?.protocol ?? "sem protocolo"}
+                </span>
+                <span>
+                  <strong>Placa</strong>
+                  {selectedConversation?.vehiclePlate ?? "n/d"}
+                </span>
+                <span>
+                  <strong>Mensagens</strong>
+                  {selectedMessages.length}
+                </span>
               </div>
               <div className="whatsapp-bubble-list">
                 {selectedMessages.map((message: any) => (
