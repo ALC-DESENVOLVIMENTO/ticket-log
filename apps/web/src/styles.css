@@ -722,7 +722,7 @@ pre {
 }
 
 .whatsapp-log-panel {
-  max-width: 1240px;
+  max-width: none;
 }
 
 .whatsapp-chat-layout {
@@ -800,8 +800,7 @@ pre {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
-  max-height: 34px;
-  overflow: hidden;
+  white-space: pre-wrap;
 }
 
 .conversation-foot {
@@ -945,6 +944,22 @@ pre {
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.whatsapp-bubble-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.whatsapp-bubble-context span {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 999px;
+  color: #39424e;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 7px;
 }
 
 .whatsapp-bubble footer {

@@ -1380,7 +1380,7 @@ function WhatsappMessagesPanel() {
 
   const conversations = Object.values(
     messages.reduce<Record<string, any>>((acc, message) => {
-      const key = message.requestId ? `request:${message.requestId}` : `phone:${message.phoneE164 ?? "unknown"}`;
+      const key = `phone:${message.phoneE164 ?? "unknown"}`;
       const current = acc[key] ?? {
         key,
         phoneE164: message.phoneE164,
@@ -1397,6 +1397,9 @@ function WhatsappMessagesPanel() {
       if (new Date(message.receivedAt).getTime() > new Date(current.lastAt).getTime()) {
         current.lastAt = message.receivedAt;
         current.lastBody = message.body;
+        current.requestId = message.requestId ?? current.requestId;
+        current.protocol =
+          message.protocol ?? (message.requestId ? shortProtocol(message.requestId) : current.protocol ?? "sem protocolo");
         current.requestStatus = message.requestStatus ?? current.requestStatus;
         current.vehiclePlate = message.vehiclePlate ?? current.vehiclePlate;
       }
@@ -1516,6 +1519,13 @@ function WhatsappMessagesPanel() {
                   <article key={message.id} className={`whatsapp-bubble-row ${message.direction === "out" ? "out" : "in"}`}>
                     <div className="whatsapp-bubble">
                       <p>{message.body || "Mensagem sem texto registrada pelo provedor."}</p>
+                      {(message.protocol || message.vehiclePlate || message.requestStatus) && (
+                        <div className="whatsapp-bubble-context">
+                          {message.protocol && <span>{message.protocol}</span>}
+                          {message.vehiclePlate && <span>{message.vehiclePlate}</span>}
+                          {message.requestStatus && <span>{getFriendlyStatus(message.requestStatus)}</span>}
+                        </div>
+                      )}
                       <footer>
                         <span>{message.direction === "out" ? "Sistema" : "WhatsApp"}</span>
                         <time>{appDateTime(message.receivedAt)}</time>
