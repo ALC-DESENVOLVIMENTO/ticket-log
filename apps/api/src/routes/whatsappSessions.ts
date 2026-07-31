@@ -7,6 +7,7 @@ import {
   recordWhatsappMessage,
   reopenWhatsappSession,
 } from "@ticketlog/db";
+import { formatRequestProtocol } from "@ticketlog/domain";
 import { createWhatsappProvider } from "@ticketlog/whatsapp";
 import { getAuthenticatedUser } from "../auth.js";
 import { config } from "../config.js";
@@ -111,7 +112,7 @@ export async function whatsappSessionRoutes(app: FastifyInstance): Promise<void>
         phoneE164: message.phone_e164,
         direction: message.direction,
         requestId: message.request_id,
-        protocol: message.request_protocol,
+        protocol: message.request_id ? formatRequestProtocol(message.request_id) : null,
         vehiclePlate: message.vehicle_plate,
         requestStatus: message.request_status,
         authenticatedUserName: message.authenticated_user_name,

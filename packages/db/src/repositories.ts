@@ -1610,7 +1610,6 @@ export async function listWhatsappMessages(input: {
   request_id: string | null;
   body: string | null;
   received_at: Date;
-  request_protocol: string | null;
   vehicle_plate: string | null;
   request_status: string | null;
   authenticated_user_name: string | null;
@@ -1639,7 +1638,6 @@ export async function listWhatsappMessages(input: {
             m.request_id,
             m.body,
             m.received_at,
-            r.request_protocol,
             r.vehicle_plate,
             r.status as request_status,
             u.name as authenticated_user_name
