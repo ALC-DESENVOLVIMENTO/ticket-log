@@ -1350,6 +1350,7 @@ function WhatsappMessagesPanel() {
   const [limit, setLimit] = useState(150);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedConversationKey, setSelectedConversationKey] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -1360,7 +1361,12 @@ function WhatsappMessagesPanel() {
         phoneE164: phoneE164.trim() || undefined,
         requestId: requestId.trim() || undefined,
       });
-      setMessages(result.messages ?? []);
+      const nextMessages = result.messages ?? [];
+      setMessages(nextMessages);
+      if (!selectedConversationKey && nextMessages.length > 0) {
+        const first = nextMessages[0];
+        setSelectedConversationKey(first.requestId ? `request:${first.requestId}` : `phone:${first.phoneE164 ?? "unknown"}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "WHATSAPP_MESSAGES_LOAD_FAILED");
     } finally {
@@ -1372,10 +1378,43 @@ function WhatsappMessagesPanel() {
     refresh().catch((err) => setError(err instanceof Error ? err.message : "WHATSAPP_MESSAGES_LOAD_FAILED"));
   }, []);
 
+  const conversations = Object.values(
+    messages.reduce<Record<string, any>>((acc, message) => {
+      const key = message.requestId ? `request:${message.requestId}` : `phone:${message.phoneE164 ?? "unknown"}`;
+      const current = acc[key] ?? {
+        key,
+        phoneE164: message.phoneE164,
+        requestId: message.requestId,
+        protocol: message.protocol ?? (message.requestId ? shortProtocol(message.requestId) : "sem protocolo"),
+        vehiclePlate: message.vehiclePlate,
+        requestStatus: message.requestStatus,
+        authenticatedUserName: message.authenticatedUserName,
+        messages: [],
+        lastAt: message.receivedAt,
+      };
+      current.messages.push(message);
+      if (new Date(message.receivedAt).getTime() > new Date(current.lastAt).getTime()) {
+        current.lastAt = message.receivedAt;
+        current.requestStatus = message.requestStatus ?? current.requestStatus;
+        current.vehiclePlate = message.vehiclePlate ?? current.vehiclePlate;
+      }
+      acc[key] = current;
+      return acc;
+    }, {}),
+  ).sort((a: any, b: any) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+
+  const selectedConversation =
+    conversations.find((conversation: any) => conversation.key === selectedConversationKey) ?? conversations[0] ?? null;
+  const selectedMessages = selectedConversation
+    ? [...selectedConversation.messages].sort(
+        (a: any, b: any) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime(),
+      )
+    : [];
+
   return (
     <section className="panel whatsapp-log-panel">
       <div className="panel-title">
-        <h2>Mensagens WhatsApp</h2>
+        <h2>Conversas WhatsApp</h2>
         <span>Somente DEV e administrador</span>
       </div>
       <div className="filters-bar">
@@ -1402,29 +1441,68 @@ function WhatsappMessagesPanel() {
         </button>
       </div>
       <ErrorBox error={error} />
-      <div className="whatsapp-message-list">
+      <div className="whatsapp-chat-layout">
         {messages.length === 0 && (
           <div className="station-empty compact-empty">
             <strong>Nenhuma mensagem encontrada.</strong>
             <span>As conversas aparecem aqui conforme chegam ou sao enviadas pelo bot.</span>
           </div>
         )}
-        {messages.map((message) => (
-          <article key={message.id} className={`whatsapp-message ${message.direction === "out" ? "out" : "in"}`}>
-            <div className="whatsapp-message-meta">
-              <strong>{message.direction === "out" ? "Sistema -> WhatsApp" : "WhatsApp -> Sistema"}</strong>
-              <span>{appDateTime(message.receivedAt)}</span>
-              <span>{message.phoneE164 ?? "sem telefone"}</span>
-              <span>{message.protocol ?? (message.requestId ? shortProtocol(message.requestId) : "sem protocolo")}</span>
-              {message.vehiclePlate && <span>{message.vehiclePlate}</span>}
-              {message.requestStatus && <span>{getFriendlyStatus(message.requestStatus)}</span>}
+        {messages.length > 0 && (
+          <>
+            <aside className="whatsapp-conversation-list" aria-label="Conversas WhatsApp">
+              {conversations.map((conversation: any) => (
+                <button
+                  key={conversation.key}
+                  type="button"
+                  className={`whatsapp-conversation ${selectedConversation?.key === conversation.key ? "active" : ""}`}
+                  onClick={() => setSelectedConversationKey(conversation.key)}
+                >
+                  <strong>{conversation.phoneE164 ?? "Telefone desconhecido"}</strong>
+                  <span>{conversation.protocol}</span>
+                  <small>
+                    {[conversation.vehiclePlate, conversation.requestStatus ? getFriendlyStatus(conversation.requestStatus) : null]
+                      .filter(Boolean)
+                      .join(" · ") || "Sem solicitacao vinculada"}
+                  </small>
+                  <time>{appDateTime(conversation.lastAt)}</time>
+                </button>
+              ))}
+            </aside>
+            <div className="whatsapp-chat-window">
+              <div className="whatsapp-chat-header">
+                <div>
+                  <strong>{selectedConversation?.phoneE164 ?? "Conversa"}</strong>
+                  <span>
+                    {selectedConversation?.protocol ?? "sem protocolo"}
+                    {selectedConversation?.vehiclePlate ? ` · ${selectedConversation.vehiclePlate}` : ""}
+                  </span>
+                </div>
+                {selectedConversation?.requestStatus && (
+                  <span className="status-pill neutral">{getFriendlyStatus(selectedConversation.requestStatus)}</span>
+                )}
+              </div>
+              <div className="whatsapp-bubble-list">
+                {selectedMessages.map((message: any) => (
+                  <article key={message.id} className={`whatsapp-bubble-row ${message.direction === "out" ? "out" : "in"}`}>
+                    <div className="whatsapp-bubble">
+                      <p>{message.body || "Mensagem sem texto registrada pelo provedor."}</p>
+                      <footer>
+                        <span>{message.direction === "out" ? "Sistema" : "WhatsApp"}</span>
+                        <time>{appDateTime(message.receivedAt)}</time>
+                      </footer>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {selectedConversation?.authenticatedUserName && (
+                <div className="whatsapp-chat-footer">
+                  Usuario autenticado: {selectedConversation.authenticatedUserName}
+                </div>
+              )}
             </div>
-            <p>{message.body || "Mensagem sem texto registrada pelo provedor."}</p>
-            {message.authenticatedUserName && (
-              <span className="muted-line">Usuario autenticado: {message.authenticatedUserName}</span>
-            )}
-          </article>
-        ))}
+          </>
+        )}
       </div>
     </section>
   );
