@@ -26,6 +26,7 @@ import {
   getRequestDetails,
   getSessionToken,
   getTicketLogSessionStatus,
+  listWhatsappMessages,
   listWhatsappSessions,
   listRequests,
   listUsers,
@@ -44,7 +45,7 @@ import {
 } from "./api";
 import "./styles.css";
 
-type AppView = "request" | "history" | "operations" | "users";
+type AppView = "request" | "history" | "operations" | "whatsapp" | "users";
 
 function BrandLockup({ compact = false }: { compact?: boolean }) {
   return (
@@ -1342,6 +1343,93 @@ function OperationsPanel({ user }: { user: any }) {
   );
 }
 
+function WhatsappMessagesPanel() {
+  const [messages, setMessages] = useState<any[]>([]);
+  const [phoneE164, setPhoneE164] = useState("");
+  const [requestId, setRequestId] = useState("");
+  const [limit, setLimit] = useState(150);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await listWhatsappMessages({
+        limit,
+        phoneE164: phoneE164.trim() || undefined,
+        requestId: requestId.trim() || undefined,
+      });
+      setMessages(result.messages ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "WHATSAPP_MESSAGES_LOAD_FAILED");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh().catch((err) => setError(err instanceof Error ? err.message : "WHATSAPP_MESSAGES_LOAD_FAILED"));
+  }, []);
+
+  return (
+    <section className="panel whatsapp-log-panel">
+      <div className="panel-title">
+        <h2>Mensagens WhatsApp</h2>
+        <span>Somente DEV e administrador</span>
+      </div>
+      <div className="filters-bar">
+        <label>
+          Telefone
+          <input value={phoneE164} onChange={(e) => setPhoneE164(e.target.value)} placeholder="+5516992999312" />
+        </label>
+        <label>
+          ID da solicitacao
+          <input value={requestId} onChange={(e) => setRequestId(e.target.value)} placeholder="UUID interno" />
+        </label>
+        <label>
+          Limite
+          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+            <option value={50}>50</option>
+            <option value={150}>150</option>
+            <option value={300}>300</option>
+            <option value={500}>500</option>
+          </select>
+        </label>
+        <button type="button" onClick={refresh} disabled={loading}>
+          <RefreshCw size={18} className={loading ? "spin" : ""} />
+          Atualizar
+        </button>
+      </div>
+      <ErrorBox error={error} />
+      <div className="whatsapp-message-list">
+        {messages.length === 0 && (
+          <div className="station-empty compact-empty">
+            <strong>Nenhuma mensagem encontrada.</strong>
+            <span>As conversas aparecem aqui conforme chegam ou sao enviadas pelo bot.</span>
+          </div>
+        )}
+        {messages.map((message) => (
+          <article key={message.id} className={`whatsapp-message ${message.direction === "out" ? "out" : "in"}`}>
+            <div className="whatsapp-message-meta">
+              <strong>{message.direction === "out" ? "Sistema -> WhatsApp" : "WhatsApp -> Sistema"}</strong>
+              <span>{appDateTime(message.receivedAt)}</span>
+              <span>{message.phoneE164 ?? "sem telefone"}</span>
+              <span>{message.protocol ?? (message.requestId ? shortProtocol(message.requestId) : "sem protocolo")}</span>
+              {message.vehiclePlate && <span>{message.vehiclePlate}</span>}
+              {message.requestStatus && <span>{getFriendlyStatus(message.requestStatus)}</span>}
+            </div>
+            <p>{message.body || "Mensagem sem texto registrada pelo provedor."}</p>
+            {message.authenticatedUserName && (
+              <span className="muted-line">Usuario autenticado: {message.authenticatedUserName}</span>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 const userRoleOptions = ["DEV", "ADMINISTRADOR", "SUPERVISOR", "COORDENADOR"];
 
 function primaryUserRole(roles: unknown) {
@@ -1586,6 +1674,9 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
             <button className={view === "operations" ? "active" : ""} onClick={() => setView("operations")}><TerminalSquare size={16} /> Operacao</button>
           )}
           {user?.access?.canManageUsers && (
+            <button className={view === "whatsapp" ? "active" : ""} onClick={() => setView("whatsapp")}><History size={16} /> WhatsApp</button>
+          )}
+          {user?.access?.canManageUsers && (
             <button className={view === "users" ? "active" : ""} onClick={() => setView("users")}><Users size={16} /> Usuarios</button>
           )}
         </nav>
@@ -1615,6 +1706,7 @@ function Dashboard({ user, publicConfig, onLogout }: { user: any; publicConfig: 
           </div>
         )}
         {view === "operations" && <OperationsPanel user={user} />}
+        {view === "whatsapp" && user?.access?.canManageUsers && <WhatsappMessagesPanel />}
         {view === "users" && user?.access?.canManageUsers && <UsersPanel />}
       </section>
     </main>

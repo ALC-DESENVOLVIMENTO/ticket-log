@@ -198,6 +198,16 @@ export async function listWhatsappSessions(limit = 30) {
   });
 }
 
+export async function listWhatsappMessages(input: { limit?: number; phoneE164?: string; requestId?: string } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(input.limit ?? 150));
+  if (input.phoneE164) params.set("phoneE164", input.phoneE164);
+  if (input.requestId) params.set("requestId", input.requestId);
+  return jsonFetch(`/admin/whatsapp/messages?${params.toString()}`, {
+    headers: devHeaders(),
+  });
+}
+
 export async function reopenWhatsappSession(phoneE164: string) {
   return jsonFetch(`/operations/whatsapp/sessions/${encodeURIComponent(phoneE164)}/reopen`, {
     method: "POST",

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   appendMaskedAuditEvent,
   getUserContext,
+  listWhatsappMessages,
   listWhatsappSessionsByScope,
   recordWhatsappMessage,
   reopenWhatsappSession,
@@ -39,6 +40,26 @@ async function requireCoordinatorOrAdmin(request: Parameters<typeof getAuthentic
   return { user, access };
 }
 
+async function requireDevOrAdmin(request: Parameters<typeof getAuthenticatedUser>[0]) {
+  const authUser = await getAuthenticatedUser(request);
+  const user = await getUserContext(authUser.id);
+  if (!user) {
+    throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+  }
+  const access = resolveAccessProfile(user);
+  if (!access.canManageUsers) {
+    throw Object.assign(new Error("WHATSAPP_MESSAGES_ACCESS_DENIED"), { statusCode: 403 });
+  }
+  return { user, access };
+}
+
+function sanitizeWhatsappBody(body: string | null): string {
+  if (!body) return "";
+  return body
+    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, "***.***.***-**")
+    .replace(/\b\d{6}\b/g, "******");
+}
+
 export async function whatsappSessionRoutes(app: FastifyInstance): Promise<void> {
   app.get("/operations/whatsapp/sessions", async (request) => {
     const { user, access } = await requireCoordinatorOrAdmin(request);
@@ -70,6 +91,32 @@ export async function whatsappSessionRoutes(app: FastifyInstance): Promise<void>
         expiresAt: session.expires_at,
         lastInteractionAt: session.last_interaction_at,
         updatedAt: session.updated_at,
+      })),
+    };
+  });
+
+  app.get("/admin/whatsapp/messages", async (request) => {
+    await requireDevOrAdmin(request);
+    const query = request.query as { limit?: string; phoneE164?: string; requestId?: string };
+    const messages = await listWhatsappMessages({
+      limit: query.limit ? Number(query.limit) : 150,
+      phoneE164: query.phoneE164,
+      requestId: query.requestId,
+    });
+
+    return {
+      messages: messages.map((message) => ({
+        id: message.id,
+        providerMessageId: message.provider_message_id,
+        phoneE164: message.phone_e164,
+        direction: message.direction,
+        requestId: message.request_id,
+        protocol: message.request_protocol,
+        vehiclePlate: message.vehicle_plate,
+        requestStatus: message.request_status,
+        authenticatedUserName: message.authenticated_user_name,
+        body: sanitizeWhatsappBody(message.body),
+        receivedAt: message.received_at,
       })),
     };
   });

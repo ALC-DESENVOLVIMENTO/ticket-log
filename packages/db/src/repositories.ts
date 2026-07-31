@@ -1597,3 +1597,61 @@ export async function recordWhatsappMessage(input: {
 
   return (result.rowCount ?? 0) === 1;
 }
+
+export async function listWhatsappMessages(input: {
+  limit?: number;
+  phoneE164?: string;
+  requestId?: string;
+}): Promise<Array<{
+  id: string;
+  provider_message_id: string | null;
+  phone_e164: string | null;
+  direction: "in" | "out";
+  request_id: string | null;
+  body: string | null;
+  received_at: Date;
+  request_protocol: string | null;
+  vehicle_plate: string | null;
+  request_status: string | null;
+  authenticated_user_name: string | null;
+}>> {
+  const boundedLimit = Math.max(1, Math.min(input.limit ?? 100, 500));
+  const params: unknown[] = [];
+  const filters: string[] = [];
+
+  if (input.phoneE164) {
+    params.push(input.phoneE164);
+    filters.push(`m.phone_e164 = $${params.length}`);
+  }
+
+  if (input.requestId) {
+    params.push(input.requestId);
+    filters.push(`m.request_id = $${params.length}::uuid`);
+  }
+
+  params.push(boundedLimit);
+  const where = filters.length ? `where ${filters.join(" and ")}` : "";
+  const result = await getPool().query(
+    `select m.id,
+            m.provider_message_id,
+            m.phone_e164,
+            m.direction,
+            m.request_id,
+            m.body,
+            m.received_at,
+            r.request_protocol,
+            r.vehicle_plate,
+            r.status as request_status,
+            u.name as authenticated_user_name
+       from whatsapp_messages m
+       left join requests r on r.id = m.request_id
+       left join whatsapp_sessions s on s.phone_e164 = m.phone_e164
+       left join users u on u.id = s.authenticated_user_id
+       ${where}
+      order by m.received_at desc
+      limit $${params.length}`,
+    params,
+  );
+
+  return result.rows as any;
+}
