@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Square,
   TerminalSquare,
+  Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import {
   createApprovalLink,
   createRequest,
   createUser,
+  deleteUser,
   getApproval,
   getMe,
   getPublicConfig,
@@ -1565,10 +1567,8 @@ function UsersPanel() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
-    employeeNumber: "",
     corporateEmail: "",
     cpf: "",
-    operationScope: "GERAL",
     phoneE164: "",
     password: "Alterar@123",
     roles: ["SUPERVISOR"],
@@ -1585,9 +1585,7 @@ function UsersPanel() {
           user.id,
           {
             name: user.name ?? "",
-            employeeNumber: user.employee_number ?? "",
             corporateEmail: user.corporate_email ?? "",
-            operationScope: user.operation_scope ?? "GERAL",
             phoneE164: user.phone_e164 ?? "",
             password: "",
             role: primaryUserRole(user.roles),
@@ -1619,9 +1617,7 @@ function UsersPanel() {
     try {
       await updateUser(userId, {
         name: draft.name,
-        employeeNumber: draft.employeeNumber,
         corporateEmail: draft.corporateEmail,
-        operationScope: draft.operationScope,
         phoneE164: draft.phoneE164,
         password: draft.password || undefined,
         roles: [primaryUserRole([draft.role])],
@@ -1646,6 +1642,23 @@ function UsersPanel() {
     }
   }
 
+  async function removeUser(user: any) {
+    setError("");
+    setStatusMessage("");
+    const confirmed = window.confirm(
+      `Excluir permanentemente o usuario ${user.name}? Essa acao remove o cadastro e os registros vinculados a ele.`,
+    );
+    if (!confirmed) return;
+    try {
+      await deleteUser(user.id);
+      setStatusMessage("Usuario excluido permanentemente.");
+      if (editingUserId === user.id) setEditingUserId(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "USER_DELETE_FAILED");
+    }
+  }
+
   function updateDraft(userId: string, patch: Record<string, string>) {
     setEditingUsers((current) => ({
       ...current,
@@ -1660,9 +1673,7 @@ function UsersPanel() {
     setEditingUserId(user.id);
     updateDraft(user.id, {
       name: user.name ?? "",
-      employeeNumber: user.employee_number ?? "",
       corporateEmail: user.corporate_email ?? "",
-      operationScope: user.operation_scope ?? "GERAL",
       phoneE164: user.phone_e164 ?? "",
       password: "",
       role: primaryUserRole(user.roles),
@@ -1682,10 +1693,8 @@ function UsersPanel() {
           <span>Acesso e MFA</span>
         </div>
         <label>Nome<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-        <label>Matricula<input value={form.employeeNumber} onChange={(e) => setForm({ ...form, employeeNumber: e.target.value })} /></label>
         <label>E-mail<input value={form.corporateEmail} onChange={(e) => setForm({ ...form, corporateEmail: e.target.value })} /></label>
         <label>CPF<input value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} placeholder="000.000.000-00" /></label>
-        <label>Escopo<input value={form.operationScope} onChange={(e) => setForm({ ...form, operationScope: e.target.value })} placeholder="GERAL" /></label>
         <label>WhatsApp E.164<input value={form.phoneE164} onChange={(e) => setForm({ ...form, phoneE164: e.target.value })} placeholder="+5511999999999" /></label>
         <label>
           Perfil
@@ -1726,16 +1735,13 @@ function UsersPanel() {
               </div>
               <div className="user-summary-grid">
                 <span><strong>Matricula</strong>{user.employee_number ?? "n/d"}</span>
-                <span><strong>Escopo</strong>{user.operation_scope ?? "GERAL"}</span>
                 <span><strong>WhatsApp</strong>{user.phone_e164 ?? "nao vinculado"}</span>
                 <span><strong>Perfil</strong>{displayUserRoles(user.roles)}</span>
               </div>
               {isEditing && (
                 <div className="user-edit-grid">
                   <label>Nome<input value={draft.name ?? ""} onChange={(e) => updateDraft(user.id, { name: e.target.value })} /></label>
-                  <label>Matricula<input value={draft.employeeNumber ?? ""} onChange={(e) => updateDraft(user.id, { employeeNumber: e.target.value })} /></label>
                   <label>E-mail<input value={draft.corporateEmail ?? ""} onChange={(e) => updateDraft(user.id, { corporateEmail: e.target.value })} /></label>
-                  <label>Escopo<input value={draft.operationScope ?? ""} onChange={(e) => updateDraft(user.id, { operationScope: e.target.value })} /></label>
                   <label>WhatsApp E.164<input value={draft.phoneE164 ?? ""} onChange={(e) => updateDraft(user.id, { phoneE164: e.target.value })} /></label>
                   <label>
                     Perfil
@@ -1767,6 +1773,10 @@ function UsersPanel() {
                 <button type="button" className="secondary" onClick={() => resetMfa(user.id)}>
                   <RefreshCw size={18} />
                   Resetar MFA
+                </button>
+                <button type="button" className="danger-secondary" onClick={() => removeUser(user)}>
+                  <Trash2 size={18} />
+                  Excluir permanentemente
                 </button>
               </div>
             </div>

@@ -3,6 +3,7 @@ import { generateSecret, generateURI } from "otplib";
 import QRCode from "qrcode";
 import {
   createAuthSession,
+  deleteUserAdmin,
   enableUserMfa,
   findUserByEmail,
   getUserContext,
@@ -25,6 +26,12 @@ import {
   hashToken,
   verifyPassword,
 } from "../security.js";
+
+function generateEmployeeNumber(): string {
+  const yyyymmdd = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `ALC-${yyyymmdd}-${suffix}`;
+}
 
 function sessionExpiresAt(): Date {
   return new Date(Date.now() + 12 * 60 * 60_000);
@@ -160,16 +167,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       roles?: string[];
     };
 
-    if (!body.name || !body.employeeNumber || !body.corporateEmail || !body.password || !body.cpf) {
+    if (!body.name || !body.corporateEmail || !body.password || !body.cpf) {
       return reply.code(400).send({ error: "MISSING_REQUIRED_USER_FIELDS" });
     }
 
     const user = await upsertUser({
       name: body.name,
-      employeeNumber: body.employeeNumber,
+      employeeNumber: body.employeeNumber || generateEmployeeNumber(),
       corporateEmail: body.corporateEmail,
       cpf: body.cpf,
-      operationScope: body.operationScope,
+      operationScope: body.operationScope ?? "GERAL",
       phoneE164: body.phoneE164,
       passwordHash: await hashPassword(body.password),
       roles: body.roles,
@@ -197,7 +204,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       roles?: string[];
     };
 
-    if (!body.name || !body.employeeNumber || !body.corporateEmail) {
+    if (!body.name || !body.corporateEmail) {
       return reply.code(400).send({ error: "MISSING_REQUIRED_USER_FIELDS" });
     }
 
@@ -215,6 +222,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const context = await getUserContext(user.id);
     if (!context) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
     return { user: publicUser(context) };
+  });
+
+  app.delete("/admin/users/:userId", async (request, reply) => {
+    const authUser = await getAuthenticatedUser(request);
+    const requester = await getUserContext(authUser.id);
+    if (!requester) throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    assertCanManageUsers(requester);
+
+    const params = request.params as { userId: string };
+    if (params.userId === requester.id) {
+      return reply.code(409).send({ error: "CANNOT_DELETE_OWN_USER" });
+    }
+
+    await deleteUserAdmin(params.userId);
+    return { ok: true };
   });
 
   app.post("/admin/users/:userId/reset-mfa", async (request) => {

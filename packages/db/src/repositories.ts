@@ -460,7 +460,7 @@ export async function upsertUser(input: {
 export async function updateUserAdmin(input: {
   userId: string;
   name: string;
-  employeeNumber: string;
+  employeeNumber?: string;
   corporateEmail: string;
   operationScope?: string;
   phoneE164?: string;
@@ -473,9 +473,9 @@ export async function updateUserAdmin(input: {
     const user = await client.query<DbUser>(
       `update users
           set name = $2,
-              employee_number = $3,
+              employee_number = coalesce($3, employee_number),
               corporate_email = lower($4),
-              operation_scope = $5,
+              operation_scope = coalesce($5, operation_scope),
               password_hash = coalesce($6, password_hash),
               password_changed_at = case when $6 is null then password_changed_at else now() end
         where id = $1
@@ -521,6 +521,62 @@ export async function updateUserAdmin(input: {
 
     await client.query("commit");
     return user.rows[0];
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteUserAdmin(userId: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const requestIds = await client.query<{ id: string }>("select id from requests where requester_id = $1", [userId]);
+    const ids = requestIds.rows.map((row) => row.id);
+
+    await client.query("update operational_runtime set operator_user_id = null where operator_user_id = $1", [userId]);
+    await client.query(
+      `update whatsapp_sessions
+          set authenticated_user_id = null,
+              authenticated_at = null,
+              active_request_id = null,
+              state = 'AGUARDANDO_CPF',
+              expires_at = now(),
+              updated_at = now()
+        where authenticated_user_id = $1`,
+      [userId],
+    );
+    await client.query("update whatsapp_auth_attempts set user_id = null where user_id = $1", [userId]);
+    await client.query("update request_status_history set actor_user_id = null where actor_user_id = $1", [userId]);
+
+    await client.query("delete from approval_tokens where expected_user_id = $1", [userId]);
+    await client.query("delete from approvals where approver_id = $1", [userId]);
+
+    if (ids.length > 0) {
+      await client.query("delete from request_notifications where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from manual_incidents where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from evidences where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from request_status_history where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from whatsapp_messages where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from audit_events where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from execution_attempts where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from automation_steps where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from approval_tokens where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from approvals where request_id = any($1::uuid[])", [ids]);
+      await client.query("delete from requests where id = any($1::uuid[])", [ids]);
+    }
+
+    await client.query("delete from auth_sessions where user_id = $1", [userId]);
+    await client.query("delete from authorized_phones where user_id = $1", [userId]);
+    await client.query("delete from user_roles where user_id = $1", [userId]);
+    const result = await client.query("delete from users where id = $1", [userId]);
+    if (result.rowCount === 0) {
+      throw Object.assign(new Error("USER_NOT_FOUND"), { statusCode: 404 });
+    }
+
+    await client.query("commit");
   } catch (error) {
     await client.query("rollback");
     throw error;

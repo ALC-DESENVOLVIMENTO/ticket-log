@@ -223,10 +223,8 @@ export async function listUsers() {
 
 export async function createUser(input: {
   name: string;
-  employeeNumber: string;
   corporateEmail: string;
   cpf: string;
-  operationScope?: string;
   phoneE164?: string;
   password: string;
   roles: string[];
@@ -240,9 +238,7 @@ export async function createUser(input: {
 
 export async function updateUser(userId: string, input: {
   name: string;
-  employeeNumber: string;
   corporateEmail: string;
-  operationScope?: string;
   phoneE164?: string;
   password?: string;
   roles: string[];
@@ -251,6 +247,13 @@ export async function updateUser(userId: string, input: {
     method: "PATCH",
     headers: devHeaders(),
     body: JSON.stringify(input),
+  });
+}
+
+export async function deleteUser(userId: string) {
+  return jsonFetch(`/admin/users/${userId}`, {
+    method: "DELETE",
+    headers: devHeaders(),
   });
 }
 

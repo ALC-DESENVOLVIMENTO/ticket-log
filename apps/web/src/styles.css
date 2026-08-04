@@ -52,6 +52,16 @@ button.secondary {
   color: var(--alc-red-dark);
 }
 
+button.danger-secondary {
+  background: #fff0f0;
+  border: 1px solid rgba(230, 0, 0, 0.24);
+  color: var(--alc-red-dark);
+}
+
+button.danger-secondary:hover {
+  background: #ffe1e1;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 284px 1fr;
