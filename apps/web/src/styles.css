@@ -322,7 +322,7 @@ pre {
 
 .auth-page {
   display: grid;
-  grid-template-columns: minmax(320px, 440px) minmax(320px, 520px);
+  grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -346,6 +346,7 @@ pre {
 .auth-page > .approval {
   align-self: center;
   justify-self: center;
+  margin: 0 auto;
 }
 
 .approval {
