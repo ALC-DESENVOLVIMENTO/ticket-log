@@ -7,8 +7,12 @@ export function createTicketLogProvider(hooks: TicketLogProviderHooks = {}): Tic
   switch (process.env.TICKETLOG_PROVIDER_MODE) {
     case "browser":
       return new BrowserTicketLogProvider(hooks);
+    case "api":
+    case "ticketlog-api":
     case "official-api":
-      return new OfficialApiTicketLogProvider();
+      return new OfficialApiTicketLogProvider(
+        process.env.TICKETLOG_API_ENABLE_BROWSER_FALLBACK === "false" ? undefined : new BrowserTicketLogProvider(hooks),
+      );
     case "simulation":
     default:
       return new SimulationTicketLogProvider();

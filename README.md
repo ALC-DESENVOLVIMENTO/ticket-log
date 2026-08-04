@@ -22,7 +22,7 @@ Configuracao inicial aplicada para `ALC & Pereira Filho Transportes`:
 - Redis/BullMQ para fila, locks e retentativas.
 - Webhook WhatsApp com validacao de assinatura.
 - Maquina de estados e politicas de limite.
-- Contrato para API oficial Ticket Log futura.
+- Provider para API Ticket Log com fallback opcional para navegador.
 - Adapter de simulacao e adapter Playwright.
 - Estrutura pronta para Railway.
 
@@ -88,12 +88,31 @@ Sem `REDIS_URL`, a solicitacao chega ate `NA_FILA`, mas nao dispara worker. Quan
 - Segunda aprovacao por usuario diferente do solicitante.
 - Cadastro administrativo basico de usuarios.
 - Politicas por grupo de veiculo.
-- Modo Ticket Log `simulation`, `browser` e `official-api`.
+- Modo Ticket Log `simulation`, `browser` e `ticketlog-api`.
 
 ## Modos Ticket Log
 
 - `TICKETLOG_PROVIDER_MODE=simulation`: nao executa acoes reais.
 - `TICKETLOG_PROVIDER_MODE=browser`: usa Playwright na interface Sou Log+.
-- `TICKETLOG_PROVIDER_MODE=official-api`: reservado para API oficial quando disponivel.
+- `TICKETLOG_PROVIDER_MODE=ticketlog-api`: usa a API documentada da Ticket Log e mantem o navegador como fallback quando a API nao tiver dados suficientes antes de qualquer alteracao.
+
+Variaveis principais para `ticketlog-api`:
+
+```bash
+TICKETLOG_PROVIDER_MODE=ticketlog-api
+TICKETLOG_REAL_EXECUTION=true
+TICKETLOG_API_BASE_URL=https://srv1.ticketlog.com.br
+TICKETLOG_API_BASIC_TOKEN=***
+TICKETLOG_CODIGO_CLIENTE=249701
+TICKETLOG_CODIGO_PRODUTO=4
+TICKETLOG_API_TIPO_ALTERACAO=AR
+TICKETLOG_API_TIPO_LIMITE=AS
+TICKETLOG_API_TIPO_OPERACAO=SP
+TICKETLOG_API_LIMIT_MESSAGE=.
+TICKETLOG_API_ENABLE_BROWSER_FALLBACK=true
+TICKETLOG_API_PLATE_CARD_MAP={"PWH4E85":"6035740000001512"}
+```
+
+Observacao: a API de limite trabalha com `numeroCartao`. Se a consulta de transacoes protegidas nao retornar o cartao da placa, configure `TICKETLOG_API_PLATE_CARD_MAP` com as placas usadas em producao ou homologacao.
 
 Nunca coloque credenciais reais em codigo. Use variaveis protegidas no Railway ou gerenciador de segredos.
